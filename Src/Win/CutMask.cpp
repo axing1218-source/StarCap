@@ -753,23 +753,23 @@ void CutMask::paintMagnifierPanel(ID2D1DeviceContext* ctx, POINT live, float lef
     const float centerPxX = std::round(cellCenterX);
     const float centerPxY = std::round(cellCenterY);
     const float outlineThickness = 1.f;
-    // The target frame must have exactly the same outer bounds as the 7px
-    // square created by the horizontal/vertical cross intersection. Keeping
-    // an 11px frame here made the black target visibly overhang the cross by
-    // two pixels on every side during an active drag. The 1px black border is
-    // drawn inward, so the 5x5 center remains transparent for color inspection.
+    // Snipaste-style dual-contrast target. The sampled center stays exactly
+    // the same 7x7 square made by the cross intersection. Around that, draw a
+    // 1px white ring (9x9 outer bounds), then a 1px black ring (11x11 outer
+    // bounds). This keeps the locator visible on both dark and light content
+    // without covering any pixel inside the 7x7 observation area.
     const float crossL = centerPxX - 3.f * scale;
     const float crossT = centerPxY - 3.f * scale;
     const float crossR = centerPxX + 4.f * scale;
     const float crossB = centerPxY + 4.f * scale;
-    // Draw the 1px black target border OUTSIDE the 7x7 cross-intersection
-    // square. The transparent observation area therefore remains exactly
-    // crossL..crossR / crossT..crossB, while the complete outer target is 9x9
-    // at 100% DPI. No border pixel is allowed to consume the sampled center.
-    const float frameL = crossL - 1.f * scale;
-    const float frameT = crossT - 1.f * scale;
-    const float frameR = crossR + 1.f * scale;
-    const float frameB = crossB + 1.f * scale;
+    const float whiteL = crossL - 1.f * scale;
+    const float whiteT = crossT - 1.f * scale;
+    const float whiteR = crossR + 1.f * scale;
+    const float whiteB = crossB + 1.f * scale;
+    const float frameL = whiteL - 1.f * scale;
+    const float frameT = whiteT - 1.f * scale;
+    const float frameR = whiteR + 1.f * scale;
+    const float frameB = whiteB + 1.f * scale;
 
     // Snipaste-style layering: shade right/bottom first. The split starts at
     // the actual cross edge, not at the wider target-frame edge, so no bright
@@ -794,12 +794,18 @@ void CutMask::paintMagnifierPanel(ID2D1DeviceContext* ctx, POINT live, float lef
     ctx->FillRectangle(D2D1::RectF(crossL, top, crossR, frameT), brushAccentSoft.Get());
     ctx->FillRectangle(D2D1::RectF(crossL, frameB, crossR, top + imageH), brushAccentSoft.Get());
 
-    // Four equal filled bars guarantee the top/bottom/left/right border has
-    // identical thickness. Do not fill the center.
+    // Two hard-edged one-pixel rings: black outside, white inside. The 7x7
+    // center itself is never painted, so it remains a true transparent/sample
+    // window. Four filled bars avoid DrawRectangle half-pixel rasterization.
     ctx->FillRectangle(D2D1::RectF(frameL, frameT, frameR, frameT + outlineThickness), brushCenterBorder.Get());
     ctx->FillRectangle(D2D1::RectF(frameL, frameB - outlineThickness, frameR, frameB), brushCenterBorder.Get());
     ctx->FillRectangle(D2D1::RectF(frameL, frameT + outlineThickness, frameL + outlineThickness, frameB - outlineThickness), brushCenterBorder.Get());
     ctx->FillRectangle(D2D1::RectF(frameR - outlineThickness, frameT + outlineThickness, frameR, frameB - outlineThickness), brushCenterBorder.Get());
+
+    ctx->FillRectangle(D2D1::RectF(whiteL, whiteT, whiteR, whiteT + outlineThickness), brushText.Get());
+    ctx->FillRectangle(D2D1::RectF(whiteL, whiteB - outlineThickness, whiteR, whiteB), brushText.Get());
+    ctx->FillRectangle(D2D1::RectF(whiteL, whiteT + outlineThickness, whiteL + outlineThickness, whiteB - outlineThickness), brushText.Get());
+    ctx->FillRectangle(D2D1::RectF(whiteR - outlineThickness, whiteT + outlineThickness, whiteR, whiteB - outlineThickness), brushText.Get());
     // Give the magnifier image border the same treatment as the center target:
     // one physical pixel, pure black, hard edged, four equal bars, transparent
     // interior. This avoids the fuzzy/asymmetric rasterization of DrawRectangle.
