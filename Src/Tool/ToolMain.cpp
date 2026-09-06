@@ -64,7 +64,6 @@ void ToolMain::refreshSize()
 ToolMain::~ToolMain()
 {
 	if (pinHooksInstalled && win) {
-		win->onMouseDown.remove(pinMouseDownToken);
 		win->onMouseUp.remove(pinMouseUpToken);
 	}
 }
@@ -150,10 +149,7 @@ void ToolMain::installPinInteractions()
 {
 	if (pinHooksInstalled || !win) return;
 	pinHooksInstalled = true;
-	pinMouseDownToken = win->onMouseDown.add([this](POINT, bool isRight) {
-		if (!isRight) return;
-		showPinContextMenu();
-	});
+	// Right-click is handled directly by WinPin::onUp, even while this toolbar is hidden.
 	pinMouseUpToken = win->onMouseUp.add([this](POINT, bool isRight) {
 		if (isRight) return;
 		applyPinToolbarVisibility();

@@ -421,7 +421,12 @@ void WinPin::onUp(POINT pos, BOOL isRight)
 	// 右键按下时什么都没抓（既没置 isMouseDown 也没 SetCapture，见 onDown），抬手也就没什么要收的。
 	// 更要紧的是不能往下走：下面那条"拖窗结束"的路会把 ToolMain 显示出来，
 	// 而右键刚刚才把它收起来 —— 一按一放就等于什么都没做
-	if (isRight) return;
+	if (isRight) {
+		// The pinned image owns its context-menu gesture. This remains reliable
+		// when ToolMain is hidden and never changes toolbar visibility by itself.
+		if (toolMain) toolMain->showPinContextMenu();
+		return;
+	}
 	isMouseDown = false;
 	ReleaseCapture();
 	auto justCreated = newShape;

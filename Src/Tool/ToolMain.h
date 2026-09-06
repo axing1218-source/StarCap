@@ -12,6 +12,7 @@ public:
 	static void queueEditorOpen();
 	float getBtnCenterX();
 	void cancelSelect();
+	void showPinContextMenu();
 public:
 	std::wstring curId;
 private:
@@ -23,13 +24,11 @@ private:
 	void refreshSize();
 	void installPinInteractions();
 	void applyPinToolbarVisibility();
-	void showPinContextMenu();
 private:
 	WinPin* win;
 	bool dpiChanged{ false };
 	bool pinToolbarVisible{ false };
 	bool pinHooksInstalled{ false };
-	winrt::event_token pinMouseDownToken{};
 	winrt::event_token pinMouseUpToken{};
 	static constexpr float btnSize{ 32.f };
 	static constexpr float spliterW{ 1.f };
