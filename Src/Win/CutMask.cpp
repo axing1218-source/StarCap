@@ -762,10 +762,14 @@ void CutMask::paintMagnifierPanel(ID2D1DeviceContext* ctx, POINT live, float lef
     const float crossT = centerPxY - 3.f * scale;
     const float crossR = centerPxX + 4.f * scale;
     const float crossB = centerPxY + 4.f * scale;
-    const float frameL = crossL;
-    const float frameT = crossT;
-    const float frameR = crossR;
-    const float frameB = crossB;
+    // Draw the 1px black target border OUTSIDE the 7x7 cross-intersection
+    // square. The transparent observation area therefore remains exactly
+    // crossL..crossR / crossT..crossB, while the complete outer target is 9x9
+    // at 100% DPI. No border pixel is allowed to consume the sampled center.
+    const float frameL = crossL - 1.f * scale;
+    const float frameT = crossT - 1.f * scale;
+    const float frameR = crossR + 1.f * scale;
+    const float frameB = crossB + 1.f * scale;
 
     // Snipaste-style layering: shade right/bottom first. The split starts at
     // the actual cross edge, not at the wider target-frame edge, so no bright
