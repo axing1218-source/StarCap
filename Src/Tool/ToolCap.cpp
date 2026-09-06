@@ -4,17 +4,7 @@
 #include "../Tip.h"
 #include "../StarCapOcr.h"
 #include "../StarCapCaptureTranslate.h"
-#include "ToolMain.h"
 #include "ToolCap.h"
-
-namespace
-{
-	bool isAnnotationTool(const std::wstring& id)
-	{
-		return id == L"rect" || id == L"ellipse" || id == L"arrow" || id == L"number" ||
-			id == L"line" || id == L"text" || id == L"mosaic" || id == L"eraser";
-	}
-}
 
 ToolCap::ToolCap(WinCap* win) : Ling::WinBase(), win(win)
 {
@@ -66,7 +56,6 @@ void ToolCap::onCreated()
 			tip->bind(btn, L"翻译 / 原文");
 		}
 		else if (btnIds[i] == L"pin") {
-			// U+E718 is the monochrome Pin glyph in Windows' built-in Segoe MDL2 Assets font.
 			btn->setFontFamily(L"Segoe MDL2 Assets");
 			btn->setFontSize(12.f);
 			tip->bind(btn, Lang::get(btnTips[i]));
@@ -84,13 +73,10 @@ void ToolCap::onCreated()
 void ToolCap::onClick(Ling::Button* btn)
 {
 	tip->hide();
-	if (isAnnotationTool(btn->id)) {
-		// WinPin owns the actual annotation engine. Queue the desired tool before
-		// switching windows so the matching ToolMain button is selected as soon as
-		// the annotation window is ready. The user therefore needs only this click.
-		ToolMain::queueInitialTool(btn->id);
-		win->startPin();
-	}
+	// Screenshot mode presents one edit entry. The complete drawing toolbar
+	// appears only after entering annotation mode, so there is no duplicated row
+	// of drawing buttons before/after the transition.
+	if (btn->id == L"mark") win->startPin();
 	else if (btn->id == L"long") win->startLong();
 	else if (btn->id == L"video") win->startVideo();
 	else if (btn->id == L"ocr") StarCapOcr::show(win);
@@ -107,4 +93,3 @@ void ToolCap::onMinMaxInfo(MINMAXINFO* mmi)
 	mmi->ptMinTrackSize.x = 1;
 	mmi->ptMinTrackSize.y = 1;
 }
-
