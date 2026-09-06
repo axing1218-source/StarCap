@@ -8,6 +8,7 @@
 #include "../App.h"
 #include "../Util.h"
 #include "../Lang.h"
+#include "../StarCapDiag.h"
 using namespace Microsoft::WRL;
 
 namespace {
@@ -17,7 +18,9 @@ namespace {
     constexpr int comparisonH = 100;
     constexpr int maxDismissTime = 3;
     constexpr int autoScrollDelayMs = 120;
-    constexpr int scrollSettleMs = 200;
+    constexpr int autoSettleFirstMs = 60;
+    constexpr int autoSettlePollMs = 45;
+    constexpr int maxAutoSettleChecks = 7;
     constexpr int settleRecheckMs = 180;
     constexpr int maxSettleRecheck = 2;
     constexpr int manualPollMs = 120;
@@ -66,6 +69,40 @@ namespace {
     {
         if (a.size() != b.size()) return true;
         return memcmp(a.data(), b.data(), a.size()) != 0;
+    }
+
+    bool bottomBandStable(const std::vector<BYTE>& a, const std::vector<BYTE>& b, int width, int height)
+    {
+        if (width <= 0 || height <= 0 || a.size() != b.size()) return false;
+        size_t expected = (size_t)width * height * 4;
+        if (a.size() < expected) return false;
+
+        int bandH = std::min(height, std::max(60, height * 3 / 10));
+        int startY = height - bandH;
+        int xStep = std::max(1, width / 80);
+        int yStep = std::max(1, bandH / 40);
+        int same = 0;
+        int total = 0;
+        for (int y = startY; y < height; y += yStep) {
+            for (int x = 0; x < width; x += xStep) {
+                size_t i = ((size_t)y * width + x) * 4;
+                int diff = abs((int)a[i] - (int)b[i])
+                    + abs((int)a[i + 1] - (int)b[i + 1])
+                    + abs((int)a[i + 2] - (int)b[i + 2]);
+                if (diff <= 12) same++;
+                total++;
+            }
+        }
+        return total > 0 && (double)same / total >= 0.992;
+    }
+
+    std::wstring windowClassName(HWND hwnd)
+    {
+        if (!hwnd || !IsWindow(hwnd)) return L"<none>";
+        wchar_t cls[256]{};
+        int n = GetClassNameW(hwnd, cls, (int)std::size(cls));
+        if (n <= 0) return L"<unknown>";
+        return std::wstring(cls, (size_t)n);
     }
 
     int findScrollByBottomStrip(const BYTE* grayOld, const BYTE* grayNew, int width, int stripH)
@@ -154,6 +191,12 @@ void CapLong::scheduleNextCapture(int delayMs)
     win->setTimer(delayMs, manualCaptureMsgId);
 }
 
+void CapLong::scheduleAutoScroll(int delayMs)
+{
+    if (!isCapturing || isFinish || !autoScroll) return;
+    win->setTimer(delayMs, scrollMsgId);
+}
+
 void CapLong::onTimerCB(UINT timerId)
 {
     if (timerId == manualCaptureMsgId) {
@@ -167,17 +210,12 @@ void CapLong::onTimerCB(UINT timerId)
     else if (timerId == scrollMsgId) {
         win->killTimer(scrollMsgId);
         if (!isCapturing || isFinish || !autoScroll) return;
-        INPUT input{};
-        input.type = INPUT_MOUSE;
-        input.mi.dwFlags = MOUSEEVENTF_WHEEL;
-        input.mi.mouseData = -WHEEL_DELTA;
-        SendInput(1, &input, sizeof(INPUT));
-        win->setTimer(scrollSettleMs, scrollEndMsgId);
+        dispatchAutoScroll();
     }
     else if (timerId == scrollEndMsgId) {
         win->killTimer(scrollEndMsgId);
-        if (!isCapturing || isFinish) return;
-        capStep();
+        if (!isCapturing || isFinish || !autoScroll) return;
+        sampleAutoSettle();
     }
 }
 
@@ -231,7 +269,17 @@ void CapLong::capStep()
 {
     auto data = Util::captureScreen(capStartPos.x, capStartPos.y, imgW, imgH);
     if (data.empty()) {
-        if (autoScroll) win->setTimer(autoScrollDelayMs, scrollMsgId);
+        if (autoScroll) scheduleAutoScroll(autoScrollDelayMs);
+        else scheduleNextCapture(manualPollMs);
+        return;
+    }
+    processFrame(std::move(data));
+}
+
+void CapLong::processFrame(std::vector<BYTE> data)
+{
+    if (data.empty()) {
+        if (autoScroll) scheduleAutoScroll(autoScrollDelayMs);
         else scheduleNextCapture(manualPollMs);
         return;
     }
@@ -249,13 +297,8 @@ void CapLong::capStep()
             if (changeStartY != -1) break;
         }
         if (changeStartY == -1) {
-            if (autoScroll) {
-                if (++dismissTime > maxDismissTime) { stopCap(); return; }
-                win->setTimer(autoScrollDelayMs, scrollMsgId);
-            }
-            else {
-                scheduleNextCapture(manualPollMs);
-            }
+            if (autoScroll) handleAutoNoProgress();
+            else scheduleNextCapture(manualPollMs);
             return;
         }
         firstCheck = false;
@@ -264,7 +307,7 @@ void CapLong::capStep()
     int rowPix{ imgW * 4 };
     int stripH = std::min(comparisonH, imgH - changeStartY);
     if (stripH <= 0) {
-        if (autoScroll) win->setTimer(autoScrollDelayMs, scrollMsgId);
+        if (autoScroll) handleAutoNoProgress();
         else scheduleNextCapture(manualPollMs);
         return;
     }
@@ -280,17 +323,15 @@ void CapLong::capStep()
     }
 
     if (y == 0) {
-        if (framesDiffer(data, img1) && settleRecheckCount < maxSettleRecheck) {
+        // Automatic mode already waited for the newly exposed bottom band to settle before
+        // reaching this matcher. Manual mode keeps the older recheck path for smooth wheel input.
+        if (!autoScroll && framesDiffer(data, img1) && settleRecheckCount < maxSettleRecheck) {
             settleRecheckCount++;
-            if (autoScroll) win->setTimer(settleRecheckMs, scrollEndMsgId);
-            else scheduleNextCapture(settleRecheckMs);
+            scheduleNextCapture(settleRecheckMs);
             return;
         }
         settleRecheckCount = 0;
-        if (autoScroll) {
-            if (++dismissTime > maxDismissTime) { stopCap(); return; }
-            win->setTimer(autoScrollDelayMs, scrollMsgId);
-        }
+        if (autoScroll) handleAutoNoProgress();
         else {
             // Manual mode never decides that the user is "done" merely because they paused.
             scheduleNextCapture(manualPollMs);
@@ -298,16 +339,16 @@ void CapLong::capStep()
         return;
     }
 
-    dismissTime = 0;
     settleRecheckCount = 0;
     int paintStart = resultH - (imgH - y - changeStartY);
     int newResultH = paintStart + (imgH - changeStartY);
-    if (paintStart < 0 || newResultH <= 0) {
-        if (autoScroll) win->setTimer(autoScrollDelayMs, scrollMsgId);
+    if (paintStart < 0 || newResultH <= resultH) {
+        if (autoScroll) handleAutoNoProgress();
         else scheduleNextCapture(manualPollMs);
         return;
     }
 
+    int addedH = newResultH - resultH;
     std::vector<BYTE> newResult((size_t)rowPix * newResultH);
     CopyMemory(newResult.data(), imgData.data(), imgData.size());
     for (int row = 0; row < imgH - changeStartY; row++) {
@@ -317,30 +358,205 @@ void CapLong::capStep()
     imgData = std::move(newResult);
     img1 = std::move(data);
     resultH = newResultH;
+    dismissTime = 0;
+
+    if (autoScroll && !autoStrategyConfirmed) {
+        autoStrategyConfirmed = true;
+        StarCapDiag::append(std::format(L"[long-v2] strategy-confirmed={} added={} resultH={}",
+            autoStrategyName(), addedH, resultH));
+    }
 
     if (resultH > 36000) { stopCap(); return; }
     makeImgPreview();
     win->refresh();
-    if (autoScroll) win->setTimer(autoScrollDelayMs, scrollMsgId);
+    if (autoScroll) scheduleAutoScroll(autoScrollDelayMs);
     else scheduleNextCapture(manualPollMs);
+}
+
+void CapLong::resolveAutoTargets()
+{
+    HWND child = WindowFromPoint(autoTargetPoint);
+    if (child && IsWindow(child)) targetHwnd = child;
+    if (targetHwnd && IsWindow(targetHwnd)) {
+        HWND root = GetAncestor(targetHwnd, GA_ROOT);
+        targetRootHwnd = root && IsWindow(root) ? root : targetHwnd;
+    }
+    else {
+        targetRootHwnd = nullptr;
+    }
+}
+
+const wchar_t* CapLong::autoStrategyName() const
+{
+    switch (autoStrategy) {
+    case AutoScrollStrategy::SendInput: return L"sendinput";
+    case AutoScrollStrategy::ChildWheelMessage: return L"child-wheel";
+    case AutoScrollStrategy::RootWheelMessage: return L"root-wheel";
+    default: return L"unknown";
+    }
+}
+
+void CapLong::dispatchAutoScroll()
+{
+    if (!isCapturing || isFinish || !autoScroll) return;
+    resolveAutoTargets();
+
+    if (!autoStrategyConfirmed) {
+        StarCapDiag::append(std::format(L"[long-v2] probe strategy={} child={} root={}",
+            autoStrategyName(), windowClassName(targetHwnd), windowClassName(targetRootHwnd)));
+    }
+
+    bool sent = false;
+    if (autoStrategy == AutoScrollStrategy::SendInput) {
+        SetCursorPos(autoTargetPoint.x, autoTargetPoint.y);
+        INPUT input{};
+        input.type = INPUT_MOUSE;
+        input.mi.dwFlags = MOUSEEVENTF_WHEEL;
+        input.mi.mouseData = -WHEEL_DELTA;
+        sent = SendInput(1, &input, sizeof(INPUT)) == 1;
+    }
+    else {
+        HWND target = autoStrategy == AutoScrollStrategy::ChildWheelMessage ? targetHwnd : targetRootHwnd;
+        if (target && IsWindow(target)) {
+            WPARAM wheelParam = static_cast<WPARAM>(static_cast<WORD>(-WHEEL_DELTA)) << 16;
+            LPARAM pointParam = MAKELPARAM(static_cast<WORD>(autoTargetPoint.x), static_cast<WORD>(autoTargetPoint.y));
+            sent = PostMessageW(target, WM_MOUSEWHEEL, wheelParam, pointParam) != FALSE;
+        }
+    }
+
+    if (!sent && !autoStrategyConfirmed) {
+        StarCapDiag::append(std::format(L"[long-v2] dispatch-failed strategy={}", autoStrategyName()));
+    }
+
+    autoSettleFrame.clear();
+    autoSettleChecks = 0;
+    win->setTimer(autoSettleFirstMs, scrollEndMsgId);
+}
+
+void CapLong::sampleAutoSettle()
+{
+    if (!isCapturing || isFinish || !autoScroll) return;
+    auto frame = Util::captureScreen(capStartPos.x, capStartPos.y, imgW, imgH);
+    if (frame.empty()) {
+        if (++autoSettleChecks >= maxAutoSettleChecks) handleAutoNoProgress();
+        else win->setTimer(autoSettlePollMs, scrollEndMsgId);
+        return;
+    }
+
+    if (autoSettleFrame.empty()) {
+        autoSettleFrame = std::move(frame);
+        autoSettleChecks = 1;
+        win->setTimer(autoSettlePollMs, scrollEndMsgId);
+        return;
+    }
+
+    bool stable = bottomBandStable(autoSettleFrame, frame, imgW, imgH);
+    autoSettleChecks++;
+    if (!stable && autoSettleChecks < maxAutoSettleChecks) {
+        autoSettleFrame = std::move(frame);
+        win->setTimer(autoSettlePollMs, scrollEndMsgId);
+        return;
+    }
+
+    autoSettleFrame.clear();
+    autoSettleChecks = 0;
+    processFrame(std::move(frame));
+}
+
+bool CapLong::advanceAutoScrollStrategy()
+{
+    resolveAutoTargets();
+    int next = (int)autoStrategy + 1;
+    int last = (int)AutoScrollStrategy::RootWheelMessage;
+    while (next <= last) {
+        auto candidate = (AutoScrollStrategy)next;
+        bool usable = true;
+        if (candidate == AutoScrollStrategy::ChildWheelMessage) {
+            usable = targetHwnd && IsWindow(targetHwnd);
+        }
+        else if (candidate == AutoScrollStrategy::RootWheelMessage) {
+            usable = targetRootHwnd && IsWindow(targetRootHwnd) && targetRootHwnd != targetHwnd;
+        }
+        if (usable) {
+            autoStrategy = candidate;
+            firstCheck = true;
+            changeStartY = -1;
+            settleRecheckCount = 0;
+            autoSettleChecks = 0;
+            autoSettleFrame.clear();
+            dismissTime = 0;
+            StarCapDiag::append(std::format(L"[long-v2] switch-strategy={}", autoStrategyName()));
+            return true;
+        }
+        next++;
+    }
+    return false;
+}
+
+void CapLong::fallbackToManual()
+{
+    if (!autoScroll) return;
+    autoScroll = false;
+    autoStrategyConfirmed = false;
+    firstCheck = true;
+    changeStartY = -1;
+    dismissTime = 0;
+    settleRecheckCount = 0;
+    autoSettleChecks = 0;
+    autoSettleFrame.clear();
+    win->killTimer(scrollMsgId);
+    win->killTimer(scrollEndMsgId);
+    StarCapDiag::append(L"[long-v2] auto-scroll unavailable; fallback=manual");
+    scheduleNextCapture(80);
+}
+
+void CapLong::handleAutoNoProgress()
+{
+    if (!autoScroll || !isCapturing || isFinish) return;
+
+    if (!autoStrategyConfirmed) {
+        if (advanceAutoScrollStrategy()) {
+            scheduleAutoScroll(90);
+        }
+        else {
+            fallbackToManual();
+        }
+        return;
+    }
+
+    if (++dismissTime > maxDismissTime) {
+        StarCapDiag::append(std::format(L"[long-v2] reached-bottom strategy={} resultH={}",
+            autoStrategyName(), resultH));
+        stopCap();
+        return;
+    }
+    scheduleAutoScroll(autoScrollDelayMs);
 }
 
 void CapLong::startAutoScroll()
 {
     if (!isCapturing || isFinish || autoScroll) return;
     autoScroll = true;
+    autoStrategyConfirmed = false;
+    autoStrategy = AutoScrollStrategy::SendInput;
     dismissTime = 0;
     settleRecheckCount = 0;
+    autoSettleChecks = 0;
+    autoSettleFrame.clear();
+    firstCheck = true;
+    changeStartY = -1;
     win->killTimer(manualCaptureMsgId);
 
-    // Put the pointer over the selected live area so SendInput(WHEEL) is delivered to the page,
-    // not to the toolbar button the user just clicked.
+    // Aim at the center of the selected live region. Phase 1 probes global input first, then
+    // addressed WM_MOUSEWHEEL messages to the deepest child and finally the top-level root.
     auto& r = win->cutMask->maskRect;
-    POINT center{ (LONG)((r.left + r.right) / 2.f), (LONG)((r.top + r.bottom) / 2.f) };
-    ClientToScreen(win->hwnd, &center);
-    SetCursorPos(center.x, center.y);
-    targetHwnd = WindowFromPoint(center);
-    win->setTimer(80, scrollMsgId);
+    autoTargetPoint = { (LONG)((r.left + r.right) / 2.f), (LONG)((r.top + r.bottom) / 2.f) };
+    ClientToScreen(win->hwnd, &autoTargetPoint);
+    SetCursorPos(autoTargetPoint.x, autoTargetPoint.y);
+    resolveAutoTargets();
+    StarCapDiag::append(std::format(L"[long-v2] auto-start point=({}, {}) child={} root={}",
+        autoTargetPoint.x, autoTargetPoint.y, windowClassName(targetHwnd), windowClassName(targetRootHwnd)));
+    scheduleAutoScroll(80);
 }
 
 void CapLong::makeTool()
@@ -384,6 +600,8 @@ void CapLong::stopCap()
     isFinish = true;
     isCapturing = false;
     autoScroll = false;
+    autoStrategyConfirmed = false;
+    autoSettleFrame.clear();
     makeStopText();
     win->restoreWin();
     win->killTimer(scrollMsgId);
