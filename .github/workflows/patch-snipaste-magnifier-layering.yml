@@ -1,11 +1,7 @@
 name: Patch Snipaste Magnifier Layering
 
 on:
-  push:
-    branches:
-      - feature/snipaste-capture-ux
-    paths:
-      - .github/workflows/patch-snipaste-magnifier-layering.yml
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -19,85 +15,16 @@ jobs:
         with:
           ref: feature/snipaste-capture-ux
           fetch-depth: 0
-      - name: Apply magnifier layering fix
-        shell: python
-        run: |
-          from pathlib import Path
-          path = Path('Src/Win/CutMask.cpp')
-          text = path.read_text(encoding='utf-8')
-          old = '''    // Cross arms end at the OUTSIDE edge of the black frame; nothing is
-    // painted across the transparent center target. Use the solid accent brush
-    // rather than the old 34% translucent blue, which looked like a milky white
-    // coating over bright source pixels.
-    ctx->FillRectangle(D2D1::RectF(left, cellCenterY - crossHalf, frameL, cellCenterY + crossHalf), brushHandle.Get());
-    ctx->FillRectangle(D2D1::RectF(frameR, cellCenterY - crossHalf, left + panelW, cellCenterY + crossHalf), brushHandle.Get());
-    ctx->FillRectangle(D2D1::RectF(cellCenterX - crossHalf, top, cellCenterX + crossHalf, frameT), brushHandle.Get());
-    ctx->FillRectangle(D2D1::RectF(cellCenterX - crossHalf, frameB, cellCenterX + crossHalf, top + imageH), brushHandle.Get());
-
-    // During an active drag, leave the top-left quadrant plus the LEFT and TOP
-    // cross arms clear. Apply the same 40% black veil to the other three
-    // quadrants and to the RIGHT and BOTTOM arms. The center target stays clear.
-    if (cap->stage == WinCap::CapStage::Select && cap->isPress) {
-        ComPtr<ID2D1SolidColorBrush> quadrantShade;
-        ctx->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::Black, .40f), quadrantShade.GetAddressOf());
-        if (quadrantShade) {
-            // Three de-emphasized quadrants.
-            ctx->FillRectangle(D2D1::RectF(frameR, top, left + panelW, frameT), quadrantShade.Get());
-            ctx->FillRectangle(D2D1::RectF(left, frameB, frameL, top + imageH), quadrantShade.Get());
-            ctx->FillRectangle(D2D1::RectF(frameR, frameB, left + panelW, top + imageH), quadrantShade.Get());
-            // Right and bottom arms use the same veil; left and top remain clear.
-            ctx->FillRectangle(D2D1::RectF(frameR, cellCenterY - crossHalf, left + panelW, cellCenterY + crossHalf), quadrantShade.Get());
-            ctx->FillRectangle(D2D1::RectF(cellCenterX - crossHalf, frameB, cellCenterX + crossHalf, top + imageH), quadrantShade.Get());
-        }
-    }
-'''
-          new = '''    // Snipaste-style drag layering: darken the entire RIGHT side and BOTTOM
-    // side first, with the split beginning at the real cross edge rather than
-    // the larger center-frame edge. This removes the bright white seams that
-    // appeared between the cross and the black target frame.
-    if (cap->stage == WinCap::CapStage::Select && cap->isPress) {
-        ComPtr<ID2D1SolidColorBrush> quadrantShade;
-        ctx->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::Black, .40f), quadrantShade.GetAddressOf());
-        if (quadrantShade) {
-            const float crossRight = cellCenterX + crossHalf;
-            const float crossBottom = cellCenterY + crossHalf;
-            // Union of right half + bottom half without double-darkening the
-            // bottom-right quadrant. This also darkens the background beneath
-            // the right and bottom cross arms, while left/top stay untouched.
-            ctx->FillRectangle(D2D1::RectF(crossRight, top, left + panelW, top + imageH), quadrantShade.Get());
-            ctx->FillRectangle(D2D1::RectF(left, crossBottom, crossRight, top + imageH), quadrantShade.Get());
-        }
-    }
-
-    // Draw the same translucent accent over all four arms AFTER the shading.
-    // On a white background the left/top arms become pale blue; on the shaded
-    // right/bottom background they naturally become the darker blue-gray seen
-    // in Snipaste. The center target stays completely transparent.
-    ctx->FillRectangle(D2D1::RectF(left, cellCenterY - crossHalf, frameL, cellCenterY + crossHalf), brushAccentSoft.Get());
-    ctx->FillRectangle(D2D1::RectF(frameR, cellCenterY - crossHalf, left + panelW, cellCenterY + crossHalf), brushAccentSoft.Get());
-    ctx->FillRectangle(D2D1::RectF(cellCenterX - crossHalf, top, cellCenterX + crossHalf, frameT), brushAccentSoft.Get());
-    ctx->FillRectangle(D2D1::RectF(cellCenterX - crossHalf, frameB, cellCenterX + crossHalf, top + imageH), brushAccentSoft.Get());
-'''
-          if old not in text:
-              raise SystemExit('Expected magnifier block not found; refusing to patch.')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
-      - name: Commit changes
-        shell: bash
+      - name: Apply patch
+        run: python .github/scripts/patch_snipaste_magnifier.py
+      - name: Commit patch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Src/Win/CutMask.cpp
           git commit -m "Match Snipaste magnifier layering"
           git push origin HEAD:feature/snipaste-capture-ux
-      - name: Build feature branch
+      - name: Build
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
         run: gh workflow run starcap-direct-build.yml --ref feature/snipaste-capture-ux
-      - name: Cleanup temporary workflow
-        shell: bash
-        run: |
-          git pull --rebase origin feature/snipaste-capture-ux
-          git rm .github/workflows/patch-snipaste-magnifier-layering.yml
-          git commit -m "Remove temporary magnifier layering workflow"
-          git push origin HEAD:feature/snipaste-capture-ux
