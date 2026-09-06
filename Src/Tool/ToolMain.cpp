@@ -10,6 +10,7 @@
 
 namespace {
 	std::wstring queuedInitialTool;
+	bool queuedEditorOpen{ false };
 
 	bool toolDarkMode()
 	{
@@ -75,6 +76,11 @@ void ToolMain::queueInitialTool(const std::wstring& id)
 	queuedInitialTool = id;
 }
 
+void ToolMain::queueEditorOpen()
+{
+	queuedEditorOpen = true;
+}
+
 float ToolMain::getBtnCenterX()
 {
 	float result{ 0.f };
@@ -131,7 +137,11 @@ void ToolMain::onCreated()
 			btns.push_back(btn);
 		}
 	}
-	pinToolbarVisible = !queuedInitialTool.empty();
+	// Edit/mark and plain pin are intentionally different entry points:
+	// edit opens the complete toolbar immediately, while a normal pin remains
+	// image-only until the user asks for the toolbar from the context menu.
+	pinToolbarVisible = queuedEditorOpen || !queuedInitialTool.empty();
+	queuedEditorOpen = false;
 	if (pinToolbarVisible) show(); else hide();
 	if (!queuedInitialTool.empty()) SetTimer(hwnd, initialToolTimerId, 1, nullptr);
 }
