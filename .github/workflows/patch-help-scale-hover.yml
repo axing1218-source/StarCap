@@ -1,0 +1,72 @@
+name: Patch Capture Help Scale And Hover
+
+on:
+  push:
+    branches:
+      - feature/snipaste-capture-ux
+    paths:
+      - .github/workflows/patch-help-scale-hover.yml
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/snipaste-capture-ux
+          fetch-depth: 0
+
+      - name: Apply help scale and hover fixes
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('Src/Win/CutMask.cpp')
+          text = p.read_text(encoding='utf-8')
+          start = text.index('void CutMask::paintHelp(ID2D1DeviceContext* ctx)')
+          end = text.index('\nvoid CutMask::suppressLegacyMagnifier', start)
+          block = text[start:end]
+
+          block = block.replace(
+              '    const float scale = win->dpi;\n',
+              '    const float dpiScale = win->dpi;\n    const float scale = dpiScale * .70f;\n',
+              1)
+          block = block.replace(
+              '    const float margin = 14.f * scale;\n',
+              '    const float margin = 14.f * dpiScale;\n',
+              1)
+
+          old = '''    const auto panel = D2D1::RectF(left, top, left + panelW, top + panelH);\n    ctx->FillRectangle(panel, brushHelpBg.Get());\n    // No outer white stroke. Key-cap strokes remain.\n'''
+          new = '''    const auto panel = D2D1::RectF(left, top, left + panelW, top + panelH);\n\n    // Keep the tutorial completely out of the user's way. The panel is only a\n    // visual overlay, so hiding it does not intercept the mouse; moving outside\n    // this same rectangle makes it reappear on the next mouse-move refresh.\n    POINT cursorLocal = cursorScreen;\n    ScreenToClient(win->hwnd, &cursorLocal);\n    if (pointInRect(panel, cursorLocal)) return;\n\n    ctx->FillRectangle(panel, brushHelpBg.Get());\n    // No outer white stroke. Key-cap strokes remain.\n'''
+          if old not in block:
+              raise SystemExit('help panel paint block not found')
+          block = block.replace(old, new, 1)
+
+          text = text[:start] + block + text[end:]
+          p.write_text(text, encoding='utf-8')
+
+      - name: Commit source fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Src/Win/CutMask.cpp
+          git commit -m "Shrink capture tutorial and hide it on hover"
+          git push origin HEAD:feature/snipaste-capture-ux
+
+      - name: Build feature branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh workflow run starcap-direct-build.yml --ref feature/snipaste-capture-ux
+
+      - name: Remove temporary workflow
+        shell: bash
+        run: |
+          git pull --rebase origin feature/snipaste-capture-ux
+          git rm .github/workflows/patch-help-scale-hover.yml
+          git commit -m "Remove temporary capture help patch workflow"
+          git push origin HEAD:feature/snipaste-capture-ux
