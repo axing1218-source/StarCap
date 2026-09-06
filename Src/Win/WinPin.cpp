@@ -264,11 +264,13 @@ void WinPin::initEditor(int x, int y, int w, int h)
 
 void WinPin::initEditorFromData(int x, int y, int w, int h, std::vector<BYTE>& data)
 {
-	// ToolMain is constructed inside WinPin, so queue editor visibility before
-	// creating the WinPin object. This gives OCR's "标注图片" the same fixed
-	// canvas + immediately visible full annotation toolbar as screenshot Mark.
+	// OCR's "标注图片" should open the full annotation toolbar immediately,
+	// but unlike screenshot Mark it still behaves like a movable image window
+	// whenever no drawing tool is selected. Passing editorMode=false preserves
+	// the normal WinPin drag path while selected tools continue to receive mouse
+	// input for annotation.
 	ToolMain::queueEditorOpen();
-	auto ptr = new WinPin(x, y, w, h, &data, true);
+	auto ptr = new WinPin(x, y, w, h, &data, false);
 	std::unique_ptr<WinPin> winPin{ ptr };
 	ptr->createNativeWindow(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, WS_POPUP);
 	winPins.push_back(std::move(winPin));
