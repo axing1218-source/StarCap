@@ -1,0 +1,158 @@
+name: Apply Capture Help Panel Spacing
+
+on:
+  push:
+    branches:
+      - feature/snipaste-capture-ux
+    paths:
+      - .github/workflows/apply-help-panel-spacing.yml
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/snipaste-capture-ux
+          fetch-depth: 0
+      - name: Refine help panel sizing and border
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('Src/Win/CutMask.cpp')
+          text = p.read_text(encoding='utf-8')
+          start = text.index('void CutMask::paintHelp(ID2D1DeviceContext* ctx)')
+          end = text.index('\nvoid CutMask::suppressLegacyMagnifier', start)
+          replacement = r'''void CutMask::paintHelp(ID2D1DeviceContext* ctx)
+{
+    if (!ctx || hideLabel) return;
+    auto* cap = static_cast<WinCap*>(win);
+    if (!cap || cap->stage != WinCap::CapStage::Select) return;
+
+    const float scale = win->dpi;
+    const bool dragging = cap->isPress;
+    auto d2d = Ling::D2D::get();
+
+    struct HelpRow
+    {
+        std::vector<std::wstring> keys;
+        std::wstring desc;
+    };
+    std::vector<HelpRow> rows{
+        {{ L"W", L"A", L"S", L"D" }, L"移动鼠标指针 1 像素"},
+        {{ L"Tab" }, L"切换窗口 / 界面元素检测"},
+        {{ L"Ctrl", L"A" }, L"当前屏幕 / 全屏"}
+    };
+    if (!dragging) {
+        rows.push_back({ { L"R", L"Shift", L"R" }, L"使用上一次截图区域" });
+        rows.push_back({ { L",", L"." }, L"回溯截图区域历史" });
+        rows.push_back({ { L"C", L"Shift" }, L"复制颜色 / 切换 RGB/HEX" });
+    }
+
+    // Size the panel from the actual rendered row widths. Left and right
+    // padding are deliberately identical, so no unused strip remains at the
+    // right side of the tutorial panel.
+    const float sidePad = 13.f * scale;
+    const float keyGap = 5.f * scale;
+    const float descGap = 10.f * scale;
+    const float keyH = 21.f * scale;
+    const float firstPad = 14.f * scale;
+    const float bottomPad = 14.f * scale;
+    const float step = 34.f * scale;
+    float contentW = 0.f;
+    for (const auto& row : rows) {
+        float rowW = 0.f;
+        for (size_t i = 0; i < row.keys.size(); ++i) {
+            auto keyLayout = d2d->makeTextLayout(row.keys[i], 11.5f * scale);
+            if (!keyLayout) continue;
+            DWRITE_TEXT_METRICS km{};
+            keyLayout->GetMetrics(&km);
+            const float kw = std::max(21.f * scale, km.width + 9.f * scale);
+            rowW += kw;
+            if (i + 1 < row.keys.size()) rowW += keyGap;
+        }
+        auto descLayout = d2d->makeTextLayout(row.desc, 12.f * scale);
+        if (descLayout) {
+            DWRITE_TEXT_METRICS dm{};
+            descLayout->GetMetrics(&dm);
+            rowW += descGap + dm.width;
+        }
+        contentW = std::max(contentW, rowW);
+    }
+    const float panelW = sidePad + contentW + sidePad;
+    const float panelH = firstPad + (rows.size() - 1) * step + keyH + bottomPad;
+
+    // Use the current monitor work area so the helper always stays above the
+    // Windows taskbar, including when the taskbar is docked to a side.
+    POINT cursorScreen{};
+    GetCursorPos(&cursorScreen);
+    HMONITOR monitor = MonitorFromPoint(cursorScreen, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi{ sizeof(mi) };
+    RECT work{ win->x, win->y, win->x + (LONG)std::lround(win->w), win->y + (LONG)std::lround(win->h) };
+    if (monitor && GetMonitorInfoW(monitor, &mi)) work = mi.rcWork;
+
+    const float workLeft = (float)(work.left - win->x);
+    const float workTop = (float)(work.top - win->y);
+    const float workRight = (float)(work.right - win->x);
+    const float workBottom = (float)(work.bottom - win->y);
+    const float margin = 14.f * scale;
+    float left = workLeft + margin;
+    float top = workBottom - margin - panelH;
+    left = std::clamp(left, workLeft, std::max(workLeft, workRight - panelW));
+    top = std::clamp(top, workTop, std::max(workTop, workBottom - panelH));
+
+    const auto panel = D2D1::RectF(left, top, left + panelW, top + panelH);
+    ctx->FillRectangle(panel, brushHelpBg.Get());
+    // Intentionally no outer stroke: the compact drag helper must not gain a
+    // white halo, and the full helper uses the same clean borderless surface.
+
+    auto drawRow = [&](float rowY, const HelpRow& row) {
+        float x = left + sidePad;
+        for (size_t i = 0; i < row.keys.size(); ++i) {
+            auto keyLayout = d2d->makeTextLayout(row.keys[i], 11.5f * scale);
+            if (!keyLayout) continue;
+            DWRITE_TEXT_METRICS km{};
+            keyLayout->GetMetrics(&km);
+            const float kw = std::max(21.f * scale, km.width + 9.f * scale);
+            ctx->DrawRectangle(D2D1::RectF(x, rowY, x + kw, rowY + keyH),
+                brushKeyBorder.Get(), std::max(1.f, scale));
+            ctx->DrawTextLayout({ x + (kw - km.width) * .5f, rowY + 1.5f * scale },
+                keyLayout.Get(), brushText.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+            x += kw;
+            if (i + 1 < row.keys.size()) x += keyGap;
+        }
+        auto descLayout = d2d->makeTextLayout(row.desc, 12.f * scale);
+        if (descLayout) ctx->DrawTextLayout({ x + descGap, rowY + 1.5f * scale },
+            descLayout.Get(), brushText.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+    };
+
+    const float firstY = top + firstPad;
+    for (size_t i = 0; i < rows.size(); ++i)
+        drawRow(firstY + step * (float)i, rows[i]);
+}
+'''
+          p.write_text(text[:start] + replacement + text[end:], encoding='utf-8')
+      - name: Commit source change
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Src/Win/CutMask.cpp
+          git commit -m "Refine capture tutorial panel spacing"
+          git push origin HEAD:feature/snipaste-capture-ux
+      - name: Build updated feature branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh workflow run starcap-direct-build.yml --ref feature/snipaste-capture-ux
+      - name: Remove temporary workflow
+        shell: bash
+        run: |
+          git pull --rebase origin feature/snipaste-capture-ux
+          git rm .github/workflows/apply-help-panel-spacing.yml
+          git commit -m "Remove temporary help panel patch workflow"
+          git push origin HEAD:feature/snipaste-capture-ux
