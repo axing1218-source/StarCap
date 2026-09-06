@@ -262,6 +262,18 @@ void WinPin::initEditor(int x, int y, int w, int h)
 	winPins.push_back(std::move(winPin));
 }
 
+void WinPin::initEditorFromData(int x, int y, int w, int h, std::vector<BYTE>& data)
+{
+	// ToolMain is constructed inside WinPin, so queue editor visibility before
+	// creating the WinPin object. This gives OCR's "标注图片" the same fixed
+	// canvas + immediately visible full annotation toolbar as screenshot Mark.
+	ToolMain::queueEditorOpen();
+	auto ptr = new WinPin(x, y, w, h, &data, true);
+	std::unique_ptr<WinPin> winPin{ ptr };
+	ptr->createNativeWindow(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, WS_POPUP);
+	winPins.push_back(std::move(winPin));
+}
+
 void WinPin::initFromData(int x, int y, int w, int h, std::vector<BYTE>& data)
 {
 	auto ptr = new WinPin(x, y, w, h, &data);
@@ -371,7 +383,11 @@ void WinPin::onDown(POINT pos, BOOL isRight)
 	hasDragged = false;
 	SetCapture(hwnd);
 	if (toolMain->curId == L"") { // plain pin: no tool means drag the pinned window
-		toolMain->hide();
+		// Do not hide ToolMain here. A normal pin starts with its toolbar hidden,
+		// but once the user explicitly enables it from the context menu it must
+		// remain visible and follow the pin while the window is moved. Hiding the
+		// native toolbar without changing pinToolbarVisible left the menu checked
+		// while the window itself was invisible, forcing an off/on toggle to recover.
 		return;
 	}
 	// 以下都是交给 shape 的坐标，一律换算成底图像素（拖窗口那条路仍用窗口坐标）

@@ -863,7 +863,7 @@ namespace StarCapOcrV2
             std::vector<BYTE> editorPixels;
             if (showTranslatedImage && translationReady) makeTranslatedPixels(editorPixels);
             if (editorPixels.empty()) editorPixels = pixels;
-            WinPin::initFromData(posX, posY, imageW, imageH, editorPixels);
+            WinPin::initEditorFromData(posX, posY, imageW, imageH, editorPixels);
             if (status) status->setText(L"已打开标注编辑器；当前图片状态会带入编辑器");
         }
 
