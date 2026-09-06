@@ -1,0 +1,47 @@
+name: Run Help And Pin Fix
+
+on:
+  push:
+    branches:
+      - feature/snipaste-capture-ux
+    paths:
+      - .github/workflows/run-help-pin-fix.yml
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/snipaste-capture-ux
+          fetch-depth: 0
+
+      - name: Apply patch script
+        run: python .github/scripts/apply_help_pin_fix.py
+
+      - name: Commit source fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Src/Win/CutMask.cpp Src/Tool/ToolMain.h Src/Tool/ToolMain.cpp Src/Win/WinPin.cpp
+          git commit -m "Sharpen tutorial keys and fix pin context menu"
+          git push origin HEAD:feature/snipaste-capture-ux
+
+      - name: Build fixed feature branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run starcap-direct-build.yml --ref feature/snipaste-capture-ux
+
+      - name: Remove temporary patch files
+        run: |
+          git pull --rebase origin feature/snipaste-capture-ux
+          git rm .github/workflows/run-help-pin-fix.yml
+          git rm .github/scripts/apply_help_pin_fix.py
+          git rm -f .github/workflows/patch-help-keys-pin-menu.yml || true
+          git rm -f .github/workflows/patch-help-keycaps-pin-context-v2.yml || true
+          git commit -m "Remove temporary help and pin patch files"
+          git push origin HEAD:feature/snipaste-capture-ux
