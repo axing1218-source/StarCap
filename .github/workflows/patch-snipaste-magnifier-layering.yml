@@ -1,7 +1,11 @@
 name: Patch Snipaste Magnifier Layering
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - feature/snipaste-capture-ux
+    paths:
+      - .github/workflows/patch-snipaste-magnifier-layering.yml
 
 permissions:
   contents: write
