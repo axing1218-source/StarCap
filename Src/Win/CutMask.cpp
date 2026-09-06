@@ -742,22 +742,25 @@ void CutMask::paintMagnifierPanel(ID2D1DeviceContext* ctx, POINT live, float lef
     ctx->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
     const float cx = left + centerCol * cellW;
     const float cy = top + centerRow * cellH;
-    const float crossThickness = 6.3f * scale;
-    const float crossHalf = crossThickness * .5f;
     const float cellCenterX = cx + cellW * .5f;
     const float cellCenterY = cy + cellH * .5f;
 
-    // Snipaste-style target: the blue cross stops at a small black frame.
-    // The frame itself is outside the observation area and its interior is
-    // completely transparent, leaving the sampled source pixel unobscured.
-    // At 100% DPI this is an 11x11 outer frame with a 1px hard black border
-    // and a 9x9 transparent center.
+    // Pixel-align the target exactly like Snipaste. At 100% DPI both the
+    // 11x11 black frame and the 7px cross are centered on the same integer
+    // source-pixel index. Using a floating 6.3px band plus round(frame-5.5)
+    // produced an asymmetric 6px horizontal arm and made the frame appear to
+    // overhang by one pixel on one side.
+    const float centerPxX = std::round(cellCenterX);
+    const float centerPxY = std::round(cellCenterY);
     const float outlineThickness = 1.f;
-    const float frameSize = 11.f * scale;
-    const float frameL = std::round(cellCenterX - frameSize * .5f);
-    const float frameT = std::round(cellCenterY - frameSize * .5f);
-    const float frameR = frameL + frameSize;
-    const float frameB = frameT + frameSize;
+    const float frameL = centerPxX - 5.f * scale;
+    const float frameT = centerPxY - 5.f * scale;
+    const float frameR = centerPxX + 6.f * scale;
+    const float frameB = centerPxY + 6.f * scale;
+    const float crossL = centerPxX - 3.f * scale;
+    const float crossT = centerPxY - 3.f * scale;
+    const float crossR = centerPxX + 4.f * scale;
+    const float crossB = centerPxY + 4.f * scale;
 
     // Snipaste-style layering: shade right/bottom first. The split starts at
     // the actual cross edge, not at the wider target-frame edge, so no bright
@@ -766,22 +769,21 @@ void CutMask::paintMagnifierPanel(ID2D1DeviceContext* ctx, POINT live, float lef
         ComPtr<ID2D1SolidColorBrush> quadrantShade;
         ctx->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::Black, .55f), quadrantShade.GetAddressOf());
         if (quadrantShade) {
-            const float crossRight = cellCenterX + crossHalf;
-            const float crossBottom = cellCenterY + crossHalf;
             // Right side, then the remaining bottom-left/bottom-center area.
-            // These rectangles form one union, so bottom-right is not shaded twice.
-            ctx->FillRectangle(D2D1::RectF(crossRight, top, left + panelW, top + imageH), quadrantShade.Get());
-            ctx->FillRectangle(D2D1::RectF(left, crossBottom, crossRight, top + imageH), quadrantShade.Get());
+            // Split exactly at the pixel-aligned cross edge; bottom-right is
+            // not shaded twice.
+            ctx->FillRectangle(D2D1::RectF(crossR, top, left + panelW, top + imageH), quadrantShade.Get());
+            ctx->FillRectangle(D2D1::RectF(left, crossB, crossR, top + imageH), quadrantShade.Get());
         }
     }
 
     // Paint the same translucent blue on all four arms after the dark veil.
     // White under left/top produces Snipaste's pale blue; shaded right/bottom
     // naturally produces the darker blue-gray. Keep the target center clear.
-    ctx->FillRectangle(D2D1::RectF(left, cellCenterY - crossHalf, frameL, cellCenterY + crossHalf), brushAccentSoft.Get());
-    ctx->FillRectangle(D2D1::RectF(frameR, cellCenterY - crossHalf, left + panelW, cellCenterY + crossHalf), brushAccentSoft.Get());
-    ctx->FillRectangle(D2D1::RectF(cellCenterX - crossHalf, top, cellCenterX + crossHalf, frameT), brushAccentSoft.Get());
-    ctx->FillRectangle(D2D1::RectF(cellCenterX - crossHalf, frameB, cellCenterX + crossHalf, top + imageH), brushAccentSoft.Get());
+    ctx->FillRectangle(D2D1::RectF(left, crossT, frameL, crossB), brushAccentSoft.Get());
+    ctx->FillRectangle(D2D1::RectF(frameR, crossT, left + panelW, crossB), brushAccentSoft.Get());
+    ctx->FillRectangle(D2D1::RectF(crossL, top, crossR, frameT), brushAccentSoft.Get());
+    ctx->FillRectangle(D2D1::RectF(crossL, frameB, crossR, top + imageH), brushAccentSoft.Get());
 
     // Four equal filled bars guarantee the top/bottom/left/right border has
     // identical thickness. Do not fill the center.
