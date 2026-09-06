@@ -558,7 +558,7 @@ MaskHit CutMask::hitTest(POINT pos) const
 {
 	if (!hasRect()) return MaskHit::None;
 	const float px = (float)pos.x, py = (float)pos.y;
-	const float hitRadius = std::max(6.f, 6.f * win->dpi);
+	const float hitRadius = std::max(7.2f, 7.2f * win->dpi);
 	const float hitRadius2 = hitRadius * hitRadius;
 	for (const auto& [p, hit] : handlePoints()) {
 		const float dx = px - p.x, dy = py - p.y;
@@ -639,7 +639,13 @@ void CutMask::adjust(POINT pos)
 void CutMask::paintHandles(ID2D1DeviceContext* ctx)
 {
 	if (!ctx || !hasRect() || hideLabel || !brushHandle) return;
-	const float radius = std::max(3.2f, 3.6f * win->dpi);
+	auto* cap = static_cast<WinCap*>(win);
+	// Automatic element/window hover is only a preview: show the clean blue
+	// outline without resize handles. Handles appear while manually dragging a
+	// new selection and after the selection enters Adjust mode.
+	if (cap && cap->stage == WinCap::CapStage::Select && !cap->isPress) return;
+	// 20% larger than the previous 3.6*dpi handle radius.
+	const float radius = std::max(3.84f, 4.32f * win->dpi);
 	for (const auto& [p, _] : handlePoints()) {
 		D2D1_ELLIPSE outer{ p, radius, radius };
 		if (brushHandleOutline) ctx->FillEllipse(outer, brushHandleOutline.Get());

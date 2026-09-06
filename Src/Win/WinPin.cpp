@@ -25,7 +25,7 @@ namespace {
 	}
 }
 
-WinPin::WinPin(int x, int y, int w, int h, const std::vector<BYTE>* data) : Ling::WinBase(), history{ std::make_unique<History>(this) }
+WinPin::WinPin(int x, int y, int w, int h, const std::vector<BYTE>* data, bool editorMode) : Ling::WinBase(), history{ std::make_unique<History>(this) }, editorMode{ editorMode }
 {
 	this->x = x;
 	this->y = y;
@@ -254,6 +254,14 @@ void WinPin::init(int x, int y, int w, int h)
 	winPins.push_back(std::move(winPin));
 }
 
+void WinPin::initEditor(int x, int y, int w, int h)
+{
+	auto ptr = new WinPin(x, y, w, h, nullptr, true);
+	std::unique_ptr<WinPin> winPin{ ptr };
+	ptr->createNativeWindow(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, WS_POPUP);
+	winPins.push_back(std::move(winPin));
+}
+
 void WinPin::initFromData(int x, int y, int w, int h, std::vector<BYTE>& data)
 {
 	auto ptr = new WinPin(x, y, w, h, &data);
@@ -353,13 +361,16 @@ void WinPin::onDown(POINT pos, BOOL isRight)
 		copyToClipboard();
 		return;
 	}
+	// Editor mode is intentionally not a desktop pin. With no drawing tool
+	// selected, a left press simply leaves the captured canvas fixed in place.
+	if (editorMode && toolMain->curId == L"") return;
 	// 记的是按下点在窗口内的偏移（客户区坐标），拖动时用它把抓住的那一点保持在光标下
 	pressPos.x = pos.x;
 	pressPos.y = pos.y;
 	isMouseDown = true;
 	hasDragged = false;
 	SetCapture(hwnd);
-	if (toolMain->curId == L"") { //没选画笔，左键是拖窗口，拖的时候把工具条收起来
+	if (toolMain->curId == L"") { // plain pin: no tool means drag the pinned window
 		toolMain->hide();
 		return;
 	}
@@ -649,7 +660,7 @@ BOOL WinPin::setCursor()
 		if (handled) return TRUE;
 	}
 	if (toolMain->curId == L"") {
-		SetCursor(LoadCursor(nullptr, IDC_SIZEALL));
+		SetCursor(LoadCursor(nullptr, editorMode ? IDC_ARROW : IDC_SIZEALL));
 		return TRUE;
 	}
 	if (shapeHover) {

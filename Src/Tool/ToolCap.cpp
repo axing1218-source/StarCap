@@ -77,8 +77,7 @@ void ToolCap::onClick(Ling::Button* btn)
 	// Edit and plain pin are different entry points. Edit opens the complete
 	// annotation toolbar immediately; Pin keeps its image-only default.
 	if (btn->id == L"mark") {
-		ToolMain::queueEditorOpen();
-		win->startPin();
+		win->startEditor();
 	}
 	else if (btn->id == L"long") win->startLong();
 	else if (btn->id == L"video") win->startVideo();

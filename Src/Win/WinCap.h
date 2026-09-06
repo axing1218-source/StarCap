@@ -30,6 +30,7 @@ public:
 	// 下面都是给工具条用的门面 ————————————————
 	// ToolCap
 	void startPin();
+	void startEditor();
 	void startLong();
 	void startVideo();
 	void startOcr();

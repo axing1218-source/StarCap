@@ -14,6 +14,9 @@ class WinPin : public Ling::WinBase
 public:
 	~WinPin();
 	static void init(int x, int y, int w, int h);
+	// Annotation editor: same image/shape engine, but the captured image is fixed
+	// in place and cannot be dragged like a desktop pin.
+	static void initEditor(int x, int y, int w, int h);
 	// 底图不来自 WinCap 的截屏，而是外部给的一块 BGRA、top-down、行紧凑（步长 = w*4）像素。
 	// 滚动截图（WinLong）拼出来的长图走这条路进贴图窗口。
 	static void initFromData(int x, int y, int w, int h, std::vector<BYTE>& data);
@@ -53,7 +56,7 @@ public:
 	// 贴图窗口的底图。ShapeMosaic 要读它算马赛克块，ShapeEraser 拿它当"擦回原样"的画刷
 	Microsoft::WRL::ComPtr<ID2D1Bitmap1> screenImg;
 private:
-	WinPin(int x, int y, int w, int h, const std::vector<BYTE>* data = nullptr);
+	WinPin(int x, int y, int w, int h, const std::vector<BYTE>* data = nullptr, bool editorMode = false);
 	void onCreated() override;
 	void layout() override;
 	void onMinMaxInfo(MINMAXINFO* mmi) override;
@@ -95,6 +98,9 @@ private:
 	Microsoft::WRL::ComPtr<IDWriteTextLayout> scaleTip;
 	Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brushTipBg, brushTipText;
 	bool isMouseDown{ false }, isClosed{ false };
+	// true only when opened from the screenshot "图像标记" action. In this
+	// mode the capture is an editor canvas, not a movable desktop pin.
+	bool editorMode{ false };
 	// onDpiChanged 与 onSizeChanged 之间的接力标记，见构造函数里的注释
 	bool dpiChanged{ false };
 	POINT pressPos{ 0,0 };
