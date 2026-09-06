@@ -9,6 +9,7 @@ public:
 	~ToolMain();
 	static void init();
 	static void queueInitialTool(const std::wstring& id);
+	static void queueEditorOpen();
 	float getBtnCenterX();
 	void cancelSelect();
 public:
@@ -39,4 +40,3 @@ private:
 	std::vector<Ling::Button*> btns;
 	std::unique_ptr<Tip> tip;
 };
-
