@@ -9,6 +9,7 @@ on:
       - starcap-source-cleanup
       - feature/long-capture-v2-phase1
       - feature/long-capture-v2-phase2
+      - feature/long-capture-v2-phase25
 
 jobs:
   build:
@@ -22,6 +23,12 @@ jobs:
         shell: pwsh
         run: |
           python tools/patch_long_capture_phase2.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Apply Long Capture V2 Phase 2.5 control patch
+        shell: pwsh
+        run: |
+          python tools/patch_long_capture_phase25.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify StarCap source identity
