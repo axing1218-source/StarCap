@@ -1,0 +1,55 @@
+name: Patch Magnifier Zoom And Cross Shading
+
+on:
+  push:
+    branches:
+      - feature/snipaste-capture-ux
+    paths:
+      - .github/workflows/patch-magnifier-zoom-shading.yml
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/snipaste-capture-ux
+          fetch-depth: 0
+      - name: Apply magnifier changes
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('Src/Win/CutMask.cpp')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace('''    const int cols = 15;\n    const int rows = 10;\n''', '''    // Show roughly twice as many source pixels in the same viewport, which\n    // halves the previous magnification while keeping the panel size unchanged.\n    // Odd counts keep the sampled pixel exactly centered.\n    const int cols = 31;\n    const int rows = 21;\n''', 1)
+
+          old = '''    // While the user is actively dragging a new capture, keep the top-left\n    // magnifier quadrant fully clear and de-emphasize the other three with a\n    // translucent black layer. The center target and cross bands are excluded\n    // so the sampled pixel remains completely unobscured.\n    if (cap->stage == WinCap::CapStage::Select && cap->isPress) {\n        ComPtr<ID2D1SolidColorBrush> quadrantShade;\n        ctx->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::Black, .40f), quadrantShade.GetAddressOf());\n        if (quadrantShade) {\n            ctx->FillRectangle(D2D1::RectF(frameR, top, left + panelW, frameT), quadrantShade.Get());\n            ctx->FillRectangle(D2D1::RectF(left, frameB, frameL, top + imageH), quadrantShade.Get());\n            ctx->FillRectangle(D2D1::RectF(frameR, frameB, left + panelW, top + imageH), quadrantShade.Get());\n        }\n    }\n\n    // Cross arms end at the OUTSIDE edge of the black frame; nothing is\n    // painted across the transparent center target.\n    ctx->FillRectangle(D2D1::RectF(left, cellCenterY - crossHalf, frameL, cellCenterY + crossHalf), brushAccentSoft.Get());\n    ctx->FillRectangle(D2D1::RectF(frameR, cellCenterY - crossHalf, left + panelW, cellCenterY + crossHalf), brushAccentSoft.Get());\n    ctx->FillRectangle(D2D1::RectF(cellCenterX - crossHalf, top, cellCenterX + crossHalf, frameT), brushAccentSoft.Get());\n    ctx->FillRectangle(D2D1::RectF(cellCenterX - crossHalf, frameB, cellCenterX + crossHalf, top + imageH), brushAccentSoft.Get());\n'''
+          new = '''    // Cross arms end at the OUTSIDE edge of the black frame; nothing is\n    // painted across the transparent center target. Use the solid accent brush\n    // rather than the old 34% translucent blue, which looked like a milky white\n    // coating over bright source pixels.\n    ctx->FillRectangle(D2D1::RectF(left, cellCenterY - crossHalf, frameL, cellCenterY + crossHalf), brushHandle.Get());\n    ctx->FillRectangle(D2D1::RectF(frameR, cellCenterY - crossHalf, left + panelW, cellCenterY + crossHalf), brushHandle.Get());\n    ctx->FillRectangle(D2D1::RectF(cellCenterX - crossHalf, top, cellCenterX + crossHalf, frameT), brushHandle.Get());\n    ctx->FillRectangle(D2D1::RectF(cellCenterX - crossHalf, frameB, cellCenterX + crossHalf, top + imageH), brushHandle.Get());\n\n    // During an active drag, leave the top-left quadrant plus the LEFT and TOP\n    // cross arms clear. Apply the same 40% black veil to the other three\n    // quadrants and to the RIGHT and BOTTOM arms. The center target stays clear.\n    if (cap->stage == WinCap::CapStage::Select && cap->isPress) {\n        ComPtr<ID2D1SolidColorBrush> quadrantShade;\n        ctx->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::Black, .40f), quadrantShade.GetAddressOf());\n        if (quadrantShade) {\n            // Three de-emphasized quadrants.\n            ctx->FillRectangle(D2D1::RectF(frameR, top, left + panelW, frameT), quadrantShade.Get());\n            ctx->FillRectangle(D2D1::RectF(left, frameB, frameL, top + imageH), quadrantShade.Get());\n            ctx->FillRectangle(D2D1::RectF(frameR, frameB, left + panelW, top + imageH), quadrantShade.Get());\n            // Right and bottom arms use the same veil; left and top remain clear.\n            ctx->FillRectangle(D2D1::RectF(frameR, cellCenterY - crossHalf, left + panelW, cellCenterY + crossHalf), quadrantShade.Get());\n            ctx->FillRectangle(D2D1::RectF(cellCenterX - crossHalf, frameB, cellCenterX + crossHalf, top + imageH), quadrantShade.Get());\n        }\n    }\n'''
+          if old not in text:
+              raise SystemExit('Magnifier shading block not found; refusing to patch')
+          text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+      - name: Commit changes
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Src/Win/CutMask.cpp
+          git commit -m "Refine magnifier zoom and shading"
+          git push origin HEAD:feature/snipaste-capture-ux
+      - name: Build feature branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh workflow run starcap-direct-build.yml --ref feature/snipaste-capture-ux
+      - name: Cleanup temporary workflow
+        shell: bash
+        run: |
+          git pull --rebase origin feature/snipaste-capture-ux
+          git rm .github/workflows/patch-magnifier-zoom-shading.yml
+          git commit -m "Remove temporary magnifier patch workflow"
+          git push origin HEAD:feature/snipaste-capture-ux
