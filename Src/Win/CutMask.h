@@ -99,7 +99,7 @@ private:
 	COLORREF sampledColor{ RGB(0, 0, 0) };
 	POINT sampledPos{ INT_MAX, INT_MAX };
 	bool colorHex{ false };
-	bool detectUiElements{ false };
+	bool detectUiElements{ true };
 	bool fullScreenToggle{ false };
 	bool legacyMagnifierSuppressed{ false };
 	bool initialDetectionDone{ false };

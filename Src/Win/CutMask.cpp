@@ -251,6 +251,18 @@ D2D1_RECT_F CutMask::detectUiElementRect(HWND hwnd, POINT localPos, const D2D1_R
 	if (!hwnd) return fallback;
 	POINT screenPos{ localPos.x + win->x, localPos.y + win->y };
 
+	HWND probeHwnd = hwnd;
+	for (int depth = 0; probeHwnd && depth < 16; ++depth) {
+		POINT client = screenPos;
+		if (!ScreenToClient(probeHwnd, &client)) break;
+		HWND child = ChildWindowFromPointEx(probeHwnd, client,
+			CWP_SKIPINVISIBLE | CWP_SKIPDISABLED | CWP_SKIPTRANSPARENT);
+		if (!child || child == probeHwnd) break;
+		RECT childRect{};
+		if (!GetWindowRect(child, &childRect) || !PtInRect(&childRect, screenPos)) break;
+		probeHwnd = child;
+	}
+
 	auto clippedCandidate = [&](const RECT& rr, const D2D1_RECT_F& parent, D2D1_RECT_F& out) {
 		if (rr.right - rr.left < 3 || rr.bottom - rr.top < 3) return false;
 		if (!PtInRect(&rr, screenPos)) return false;
@@ -295,7 +307,12 @@ D2D1_RECT_F CutMask::detectUiElementRect(HWND hwnd, POINT localPos, const D2D1_R
 		}
 
 		ComPtr<IUIAutomationElement> current;
-		if (SUCCEEDED(automation->ElementFromHandle(hwnd, current.GetAddressOf())) && current) {
+		HRESULT rootHr = automation->ElementFromHandle(probeHwnd, current.GetAddressOf());
+		if ((FAILED(rootHr) || !current) && probeHwnd != hwnd) {
+			current.Reset();
+			rootHr = automation->ElementFromHandle(hwnd, current.GetAddressOf());
+		}
+		if (SUCCEEDED(rootHr) && current) {
 			ComPtr<IUIAutomationTreeWalker> walker;
 			automation->get_RawViewWalker(walker.GetAddressOf());
 			D2D1_RECT_F best = fallback;
@@ -345,8 +362,14 @@ D2D1_RECT_F CutMask::detectUiElementRect(HWND hwnd, POINT localPos, const D2D1_R
 	}
 
 	ComPtr<IAccessible> acc;
-	if (SUCCEEDED(AccessibleObjectFromWindow(hwnd, OBJID_CLIENT, IID_IAccessible,
-		reinterpret_cast<void**>(acc.GetAddressOf()))) && acc) {
+	HRESULT accHr = AccessibleObjectFromWindow(probeHwnd, OBJID_CLIENT, IID_IAccessible,
+		reinterpret_cast<void**>(acc.GetAddressOf()));
+	if ((FAILED(accHr) || !acc) && probeHwnd != hwnd) {
+		acc.Reset();
+		accHr = AccessibleObjectFromWindow(hwnd, OBJID_CLIENT, IID_IAccessible,
+			reinterpret_cast<void**>(acc.GetAddressOf()));
+	}
+	if (SUCCEEDED(accHr) && acc) {
 		D2D1_RECT_F best = fallback;
 		for (int depth = 0; acc && depth < 16; ++depth) {
 			VARIANT hit{};
@@ -939,31 +962,32 @@ void CutMask::paintHelp(ID2D1DeviceContext* ctx)
     const float bottomPad = 14.f * scale;
     const float step = 39.f * scale;
 
-    // Measure exactly what will be painted. The longest rendered row determines
-    // the panel width, then the same sidePad is added to both sides. This makes
-    // the W key-cap's left edge -> panel edge distance equal to the final glyph
-    // -> right panel edge distance, rather than relying on a guessed fixed width.
-    float contentW = 0.f;
-    for (const auto& row : rows) {
-        float rowW = 0.f;
+    auto measureKeyGroup = [&](const HelpRow& row) {
+        float width = 0.f;
         for (size_t i = 0; i < row.keys.size(); ++i) {
-  auto keyLayout = d2d->makeTextLayout(row.keys[i], 12.5f * scale);
-  if (!keyLayout) continue;
-  DWRITE_TEXT_METRICS km{};
-  keyLayout->GetMetrics(&km);
-  rowW += std::max(22.f * scale, km.width + 10.f * scale);
-  if (i + 1 < row.keys.size()) rowW += keyGap;
+            auto keyLayout = d2d->makeTextLayout(row.keys[i], 12.5f * scale);
+            if (!keyLayout) continue;
+            DWRITE_TEXT_METRICS km{};
+            keyLayout->GetMetrics(&km);
+            width += std::max(22.f * scale, km.width + 10.f * scale);
+            if (i + 1 < row.keys.size()) width += keyGap;
         }
+        return width;
+    };
+
+    float keyColumnW = 0.f;
+    float descColumnW = 0.f;
+    for (const auto& row : rows) {
+        keyColumnW = std::max(keyColumnW, measureKeyGroup(row));
         auto descLayout = d2d->makeTextLayout(row.desc, 16.f * scale);
         if (descLayout) {
-  DWRITE_TEXT_METRICS dm{};
-  descLayout->GetMetrics(&dm);
-  rowW += descGap + dm.width;
+            DWRITE_TEXT_METRICS dm{};
+            descLayout->GetMetrics(&dm);
+            descColumnW = std::max(descColumnW, dm.width);
         }
-        contentW = std::max(contentW, rowW);
     }
 
-    const float panelW = sidePad + contentW + sidePad;
+    const float panelW = sidePad + keyColumnW + descGap + descColumnW + sidePad;
     const float panelH = firstPad + (rows.size() - 1) * step + keyH + bottomPad;
 
     POINT cursorScreen{};
@@ -985,46 +1009,44 @@ void CutMask::paintHelp(ID2D1DeviceContext* ctx)
 
     const auto panel = D2D1::RectF(left, top, left + panelW, top + panelH);
 
-    // Keep the tutorial completely out of the user's way. The panel is only a
-    // visual overlay, so hiding it does not intercept the mouse; moving outside
-    // this same rectangle makes it reappear on the next mouse-move refresh.
     POINT cursorLocal = cursorScreen;
     ScreenToClient(win->hwnd, &cursorLocal);
     if (pointInRect(panel, cursorLocal)) return;
 
     ctx->FillRectangle(panel, brushHelpBg.Get());
-    // No outer white stroke. Key-cap strokes remain.
+
+    const float keyColumnRight = left + sidePad + keyColumnW;
+    const float descColumnLeft = keyColumnRight + descGap;
 
     auto drawRow = [&](float rowY, const HelpRow& row) {
-        float x = left + sidePad;
+        const float groupW = measureKeyGroup(row);
+        float x = keyColumnRight - groupW;
         for (size_t i = 0; i < row.keys.size(); ++i) {
-  auto keyLayout = d2d->makeTextLayout(row.keys[i], 12.5f * scale);
-  if (!keyLayout) continue;
-  DWRITE_TEXT_METRICS km{};
-  keyLayout->GetMetrics(&km);
-  const float kw = std::max(22.f * scale, km.width + 10.f * scale);
-  // Pure white, one-physical-pixel hard frame. Use four filled bars on
-  // rounded device coordinates so the key cap has no antialiased/foggy edge.
-  const float kl = std::round(x);
-  const float kt = std::round(rowY);
-  const float kr = std::round(x + kw);
-  const float kb = std::round(rowY + keyH);
-  constexpr float keyStroke = 1.f;
-  const auto oldAA = ctx->GetAntialiasMode();
-  ctx->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
-  ctx->FillRectangle(D2D1::RectF(kl, kt, kr, kt + keyStroke), brushKeyBorder.Get());
-  ctx->FillRectangle(D2D1::RectF(kl, kb - keyStroke, kr, kb), brushKeyBorder.Get());
-  ctx->FillRectangle(D2D1::RectF(kl, kt + keyStroke, kl + keyStroke, kb - keyStroke), brushKeyBorder.Get());
-  ctx->FillRectangle(D2D1::RectF(kr - keyStroke, kt + keyStroke, kr, kb - keyStroke), brushKeyBorder.Get());
-  ctx->SetAntialiasMode(oldAA);
-  ctx->DrawTextLayout({ x + (kw - km.width) * .5f, rowY + 1.5f * scale },
-      keyLayout.Get(), brushText.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
-  x += kw;
-  if (i + 1 < row.keys.size()) x += keyGap;
+            auto keyLayout = d2d->makeTextLayout(row.keys[i], 12.5f * scale);
+            if (!keyLayout) continue;
+            DWRITE_TEXT_METRICS km{};
+            keyLayout->GetMetrics(&km);
+            const float kw = std::max(22.f * scale, km.width + 10.f * scale);
+            const float kl = std::round(x);
+            const float kt = std::round(rowY);
+            const float kr = std::round(x + kw);
+            const float kb = std::round(rowY + keyH);
+            constexpr float keyStroke = 1.f;
+            const auto oldAA = ctx->GetAntialiasMode();
+            ctx->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
+            ctx->FillRectangle(D2D1::RectF(kl, kt, kr, kt + keyStroke), brushKeyBorder.Get());
+            ctx->FillRectangle(D2D1::RectF(kl, kb - keyStroke, kr, kb), brushKeyBorder.Get());
+            ctx->FillRectangle(D2D1::RectF(kl, kt + keyStroke, kl + keyStroke, kb - keyStroke), brushKeyBorder.Get());
+            ctx->FillRectangle(D2D1::RectF(kr - keyStroke, kt + keyStroke, kr, kb - keyStroke), brushKeyBorder.Get());
+            ctx->SetAntialiasMode(oldAA);
+            ctx->DrawTextLayout({ x + (kw - km.width) * .5f, rowY + 1.5f * scale },
+                keyLayout.Get(), brushText.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+            x += kw;
+            if (i + 1 < row.keys.size()) x += keyGap;
         }
         auto descLayout = d2d->makeTextLayout(row.desc, 16.f * scale);
-        if (descLayout) ctx->DrawTextLayout({ x + descGap, rowY - 0.5f * scale },
-  descLayout.Get(), brushText.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+        if (descLayout) ctx->DrawTextLayout({ descColumnLeft, rowY - 0.5f * scale },
+            descLayout.Get(), brushText.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
     };
 
     const float firstY = top + firstPad;
