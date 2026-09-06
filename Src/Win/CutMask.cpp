@@ -813,7 +813,8 @@ void CutMask::paintHelp(ID2D1DeviceContext* ctx)
     auto* cap = static_cast<WinCap*>(win);
     if (!cap || cap->stage != WinCap::CapStage::Select) return;
 
-    const float scale = win->dpi;
+    const float dpiScale = win->dpi;
+    const float scale = dpiScale * .70f;
     const bool dragging = cap->isPress;
     auto d2d = Ling::D2D::get();
 
@@ -880,13 +881,21 @@ void CutMask::paintHelp(ID2D1DeviceContext* ctx)
     const float workTop = (float)(work.top - win->y);
     const float workRight = (float)(work.right - win->x);
     const float workBottom = (float)(work.bottom - win->y);
-    const float margin = 14.f * scale;
+    const float margin = 14.f * dpiScale;
     float left = workLeft + margin;
     float top = workBottom - margin - panelH;
     left = std::clamp(left, workLeft, std::max(workLeft, workRight - panelW));
     top = std::clamp(top, workTop, std::max(workTop, workBottom - panelH));
 
     const auto panel = D2D1::RectF(left, top, left + panelW, top + panelH);
+
+    // Keep the tutorial completely out of the user's way. The panel is only a
+    // visual overlay, so hiding it does not intercept the mouse; moving outside
+    // this same rectangle makes it reappear on the next mouse-move refresh.
+    POINT cursorLocal = cursorScreen;
+    ScreenToClient(win->hwnd, &cursorLocal);
+    if (pointInRect(panel, cursorLocal)) return;
+
     ctx->FillRectangle(panel, brushHelpBg.Get());
     // No outer white stroke. Key-cap strokes remain.
 
