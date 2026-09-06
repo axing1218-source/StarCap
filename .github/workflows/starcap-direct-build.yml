@@ -7,6 +7,12 @@ on:
       - main
       - starcap-v0.9.7
       - starcap-source-cleanup
+      - feature/snipaste-capture-ux
+    paths:
+      - .github/workflows/starcap-direct-build.yml
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -15,6 +21,19 @@ jobs:
     steps:
       - name: Checkout StarCap
         uses: actions/checkout@v4
+
+      - name: Apply one-time capture UX patch
+        if: github.ref == 'refs/heads/feature/snipaste-capture-ux'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python .github/scripts/apply_help_pin_fix.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Src/Win/CutMask.cpp Src/Tool/ToolMain.h Src/Tool/ToolMain.cpp Src/Win/WinPin.cpp
+          git commit -m "Sharpen tutorial keys and fix pin context menu"
+          git push origin HEAD:feature/snipaste-capture-ux
 
       - name: Verify StarCap source identity
         shell: pwsh
