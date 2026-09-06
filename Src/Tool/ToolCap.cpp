@@ -4,6 +4,7 @@
 #include "../Tip.h"
 #include "../StarCapOcr.h"
 #include "../StarCapCaptureTranslate.h"
+#include "ToolMain.h"
 #include "ToolCap.h"
 
 ToolCap::ToolCap(WinCap* win) : Ling::WinBase(), win(win)
@@ -73,10 +74,12 @@ void ToolCap::onCreated()
 void ToolCap::onClick(Ling::Button* btn)
 {
 	tip->hide();
-	// Screenshot mode presents one edit entry. The complete drawing toolbar
-	// appears only after entering annotation mode, so there is no duplicated row
-	// of drawing buttons before/after the transition.
-	if (btn->id == L"mark") win->startPin();
+	// Edit and plain pin are different entry points. Edit opens the complete
+	// annotation toolbar immediately; Pin keeps its image-only default.
+	if (btn->id == L"mark") {
+		ToolMain::queueEditorOpen();
+		win->startPin();
+	}
 	else if (btn->id == L"long") win->startLong();
 	else if (btn->id == L"video") win->startVideo();
 	else if (btn->id == L"ocr") StarCapOcr::show(win);
