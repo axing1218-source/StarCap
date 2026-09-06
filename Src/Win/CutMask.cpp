@@ -753,14 +753,19 @@ void CutMask::paintMagnifierPanel(ID2D1DeviceContext* ctx, POINT live, float lef
     const float centerPxX = std::round(cellCenterX);
     const float centerPxY = std::round(cellCenterY);
     const float outlineThickness = 1.f;
-    const float frameL = centerPxX - 5.f * scale;
-    const float frameT = centerPxY - 5.f * scale;
-    const float frameR = centerPxX + 6.f * scale;
-    const float frameB = centerPxY + 6.f * scale;
+    // The target frame must have exactly the same outer bounds as the 7px
+    // square created by the horizontal/vertical cross intersection. Keeping
+    // an 11px frame here made the black target visibly overhang the cross by
+    // two pixels on every side during an active drag. The 1px black border is
+    // drawn inward, so the 5x5 center remains transparent for color inspection.
     const float crossL = centerPxX - 3.f * scale;
     const float crossT = centerPxY - 3.f * scale;
     const float crossR = centerPxX + 4.f * scale;
     const float crossB = centerPxY + 4.f * scale;
+    const float frameL = crossL;
+    const float frameT = crossT;
+    const float frameR = crossR;
+    const float frameB = crossB;
 
     // Snipaste-style layering: shade right/bottom first. The split starts at
     // the actual cross edge, not at the wider target-frame edge, so no bright
