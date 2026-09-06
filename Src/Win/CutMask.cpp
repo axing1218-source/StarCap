@@ -4,6 +4,7 @@
 #include <cmath>
 #include <dwmapi.h>
 #include <imm.h>
+#include <oleacc.h>
 #include <UIAutomation.h>
 #include <include/Ling.h>
 #include "CutMask.h"
@@ -14,6 +15,7 @@
 
 #pragma comment(lib, "Uiautomationcore.lib")
 #pragma comment(lib, "Imm32.lib")
+#pragma comment(lib, "Oleacc.lib")
 
 using namespace Microsoft::WRL;
 
@@ -246,59 +248,153 @@ D2D1_RECT_F CutMask::detectNativeChildRect(HWND hwnd, POINT localPos, const D2D1
 
 D2D1_RECT_F CutMask::detectUiElementRect(HWND hwnd, POINT localPos, const D2D1_RECT_F& fallback)
 {
-	if (!automation || !hwnd) return detectNativeChildRect(hwnd, localPos, fallback);
+	if (!hwnd) return fallback;
 	POINT screenPos{ localPos.x + win->x, localPos.y + win->y };
-	ComPtr<IUIAutomationElement> direct;
-	if (SUCCEEDED(automation->ElementFromPoint(screenPos, direct.GetAddressOf())) && direct) {
-		UIA_HWND nativeHandle{};
-		RECT rr{};
-		BOOL offscreen = FALSE;
-		direct->get_CurrentNativeWindowHandle(&nativeHandle);
-		if ((HWND)nativeHandle != win->hwnd &&
-			SUCCEEDED(direct->get_CurrentIsOffscreen(&offscreen)) && !offscreen &&
-			SUCCEEDED(direct->get_CurrentBoundingRectangle(&rr))) {
-			auto local = intersectRectF(rectFromScreenRect(rr, win), fallback);
-			const float area = rectArea(local);
-			if (validRect(local) && area >= 36.f && area < rectArea(fallback) * .995f)
-				return local;
+
+	auto clippedCandidate = [&](const RECT& rr, const D2D1_RECT_F& parent, D2D1_RECT_F& out) {
+		if (rr.right - rr.left < 3 || rr.bottom - rr.top < 3) return false;
+		if (!PtInRect(&rr, screenPos)) return false;
+		out = intersectRectF(rectFromScreenRect(rr, win), parent);
+		const float area = rectArea(out);
+		return validRect(out) && area >= 24.f;
+	};
+
+	auto semanticWeight = [](CONTROLTYPEID type) {
+		switch (type) {
+		case UIA_TextControlTypeId:
+		case UIA_ImageControlTypeId:
+		case UIA_ButtonControlTypeId:
+		case UIA_HyperlinkControlTypeId:
+		case UIA_EditControlTypeId:
+		case UIA_ListItemControlTypeId:
+		case UIA_MenuItemControlTypeId:
+			return .72f;
+		case UIA_DocumentControlTypeId:
+		case UIA_GroupControlTypeId:
+		case UIA_PaneControlTypeId:
+			return 1.08f;
+		default:
+			return 1.f;
 		}
-	}
-	ComPtr<IUIAutomationElement> current;
-	if (SUCCEEDED(automation->ElementFromHandle(hwnd, current.GetAddressOf())) && current) {
-		ComPtr<IUIAutomationTreeWalker> walker;
-		automation->get_ControlViewWalker(walker.GetAddressOf());
-		D2D1_RECT_F best = fallback;
-		for (int depth = 0; walker && current && depth < 14; ++depth) {
-			ComPtr<IUIAutomationElement> child;
-			if (FAILED(walker->GetFirstChildElement(current.Get(), child.GetAddressOf())) || !child) break;
-			ComPtr<IUIAutomationElement> bestChild;
-			D2D1_RECT_F bestChildRect{};
-			float bestChildArea = FLT_MAX;
-			int siblingCount = 0;
-			while (child && siblingCount++ < 256) {
-				BOOL offscreen = FALSE;
-				RECT rr{};
-				if (SUCCEEDED(child->get_CurrentIsOffscreen(&offscreen)) && !offscreen &&
-					SUCCEEDED(child->get_CurrentBoundingRectangle(&rr)) &&
-					rr.right - rr.left >= 3 && rr.bottom - rr.top >= 3 && PtInRect(&rr, screenPos)) {
-					auto local = intersectRectF(rectFromScreenRect(rr, win), fallback);
-					const float area = rectArea(local);
-					if (validRect(local) && area >= 36.f && area < bestChildArea) {
-						bestChildArea = area;
-						bestChildRect = local;
-						bestChild = child;
-					}
-				}
-				ComPtr<IUIAutomationElement> next;
-				if (FAILED(walker->GetNextSiblingElement(child.Get(), next.GetAddressOf()))) break;
-				child = next;
+	};
+
+	if (automation) {
+		ComPtr<IUIAutomationElement> direct;
+		if (SUCCEEDED(automation->ElementFromPoint(screenPos, direct.GetAddressOf())) && direct) {
+			UIA_HWND nativeHandle{};
+			RECT rr{};
+			BOOL offscreen = FALSE;
+			direct->get_CurrentNativeWindowHandle(&nativeHandle);
+			if ((HWND)nativeHandle != win->hwnd &&
+				SUCCEEDED(direct->get_CurrentIsOffscreen(&offscreen)) && !offscreen &&
+				SUCCEEDED(direct->get_CurrentBoundingRectangle(&rr))) {
+				D2D1_RECT_F local{};
+				if (clippedCandidate(rr, fallback, local) && rectArea(local) < rectArea(fallback) * .995f)
+					return local;
 			}
-			if (!bestChild) break;
-			best = bestChildRect;
-			current = bestChild;
 		}
-		if (validRect(best) && rectArea(best) < rectArea(fallback) * .995f) return best;
+
+		ComPtr<IUIAutomationElement> current;
+		if (SUCCEEDED(automation->ElementFromHandle(hwnd, current.GetAddressOf())) && current) {
+			ComPtr<IUIAutomationTreeWalker> walker;
+			automation->get_RawViewWalker(walker.GetAddressOf());
+			D2D1_RECT_F best = fallback;
+
+			for (int depth = 0; walker && current && depth < 20; ++depth) {
+				ComPtr<IUIAutomationElement> child;
+				if (FAILED(walker->GetFirstChildElement(current.Get(), child.GetAddressOf())) || !child) break;
+
+				ComPtr<IUIAutomationElement> winner;
+				D2D1_RECT_F winnerRect{};
+				float winnerScore = FLT_MAX;
+				int siblingCount = 0;
+
+				while (child && siblingCount++ < 512) {
+					BOOL offscreen = FALSE;
+					RECT rr{};
+					if (SUCCEEDED(child->get_CurrentIsOffscreen(&offscreen)) && !offscreen &&
+						SUCCEEDED(child->get_CurrentBoundingRectangle(&rr))) {
+						D2D1_RECT_F local{};
+						if (clippedCandidate(rr, best, local)) {
+							const float area = rectArea(local);
+							CONTROLTYPEID controlType{};
+							child->get_CurrentControlType(&controlType);
+							float score = area * semanticWeight(controlType);
+							if (sameRectRounded(local, best)) score *= 1.35f;
+							if (score < winnerScore) {
+								winnerScore = score;
+								winnerRect = local;
+								winner = child;
+							}
+						}
+					}
+
+					ComPtr<IUIAutomationElement> next;
+					if (FAILED(walker->GetNextSiblingElement(child.Get(), next.GetAddressOf()))) break;
+					child = next;
+				}
+
+				if (!winner) break;
+				best = winnerRect;
+				current = winner;
+			}
+
+			if (validRect(best) && rectArea(best) < rectArea(fallback) * .995f)
+				return best;
+		}
 	}
+
+	ComPtr<IAccessible> acc;
+	if (SUCCEEDED(AccessibleObjectFromWindow(hwnd, OBJID_CLIENT, IID_IAccessible,
+		reinterpret_cast<void**>(acc.GetAddressOf()))) && acc) {
+		D2D1_RECT_F best = fallback;
+		for (int depth = 0; acc && depth < 16; ++depth) {
+			VARIANT hit{};
+			VariantInit(&hit);
+			if (FAILED(acc->accHitTest(screenPos.x, screenPos.y, &hit))) {
+				VariantClear(&hit);
+				break;
+			}
+
+			ComPtr<IAccessible> nextAcc;
+			VARIANT locationId{};
+			VariantInit(&locationId);
+			locationId.vt = VT_I4;
+			locationId.lVal = CHILDID_SELF;
+
+			if (hit.vt == VT_DISPATCH && hit.pdispVal) {
+				hit.pdispVal->QueryInterface(IID_PPV_ARGS(nextAcc.GetAddressOf()));
+			}
+			else if (hit.vt == VT_I4) {
+				locationId.lVal = hit.lVal;
+				if (hit.lVal != CHILDID_SELF) {
+					ComPtr<IDispatch> childDispatch;
+					if (SUCCEEDED(acc->get_accChild(locationId, childDispatch.GetAddressOf())) && childDispatch)
+						childDispatch->QueryInterface(IID_PPV_ARGS(nextAcc.GetAddressOf()));
+				}
+			}
+
+			IAccessible* locAcc = nextAcc ? nextAcc.Get() : acc.Get();
+			VARIANT locChild{};
+			VariantInit(&locChild);
+			locChild.vt = VT_I4;
+			locChild.lVal = nextAcc ? CHILDID_SELF : locationId.lVal;
+			long l{}, t{}, w{}, h{};
+			if (SUCCEEDED(locAcc->accLocation(&l, &t, &w, &h, locChild)) && w >= 3 && h >= 3) {
+				RECT rr{ l, t, l + w, t + h };
+				D2D1_RECT_F local{};
+				if (clippedCandidate(rr, best, local)) best = local;
+			}
+
+			VariantClear(&hit);
+			if (!nextAcc || nextAcc.Get() == acc.Get()) break;
+			acc = nextAcc;
+		}
+
+		if (validRect(best) && rectArea(best) < rectArea(fallback) * .995f)
+			return best;
+	}
+
 	return detectNativeChildRect(hwnd, localPos, fallback);
 }
 
@@ -814,7 +910,7 @@ void CutMask::paintHelp(ID2D1DeviceContext* ctx)
     if (!cap || cap->stage != WinCap::CapStage::Select) return;
 
     const float dpiScale = win->dpi;
-    const float scale = dpiScale * .70f;
+    const float scale = dpiScale * .90f;
     const bool dragging = cap->isPress;
     auto d2d = Ling::D2D::get();
 
