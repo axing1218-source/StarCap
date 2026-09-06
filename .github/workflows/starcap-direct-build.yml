@@ -8,6 +8,7 @@ on:
       - starcap-v0.9.7
       - starcap-source-cleanup
       - feature/long-capture-v2-phase1
+      - feature/long-capture-v2-phase2
 
 jobs:
   build:
@@ -16,6 +17,12 @@ jobs:
     steps:
       - name: Checkout StarCap
         uses: actions/checkout@v4
+
+      - name: Apply Long Capture V2 Phase 2 test patch
+        shell: pwsh
+        run: |
+          python tools/patch_long_capture_phase2.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify StarCap source identity
         shell: pwsh
