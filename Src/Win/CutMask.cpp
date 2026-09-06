@@ -700,8 +700,11 @@ void CutMask::paintMagnifierPanel(ID2D1DeviceContext* ctx, POINT live, float lef
     if (!cap || !cap->screenImg) return;
 
     const float scale = win->dpi;
-    const int cols = 15;
-    const int rows = 10;
+    // Show roughly twice as many source pixels in the same viewport, which
+    // halves the previous magnification while keeping the panel size unchanged.
+    // Odd counts keep the sampled pixel exactly centered.
+    const int cols = 31;
+    const int rows = 21;
     const float panelW = 179.f * scale;
     const float imageH = 122.f * scale;
     const float infoH = 105.f * scale;
@@ -756,26 +759,31 @@ void CutMask::paintMagnifierPanel(ID2D1DeviceContext* ctx, POINT live, float lef
     const float frameR = frameL + frameSize;
     const float frameB = frameT + frameSize;
 
-    // While the user is actively dragging a new capture, keep the top-left
-    // magnifier quadrant fully clear and de-emphasize the other three with a
-    // translucent black layer. The center target and cross bands are excluded
-    // so the sampled pixel remains completely unobscured.
+    // Cross arms end at the OUTSIDE edge of the black frame; nothing is
+    // painted across the transparent center target. Use the solid accent brush
+    // rather than the old 34% translucent blue, which looked like a milky white
+    // coating over bright source pixels.
+    ctx->FillRectangle(D2D1::RectF(left, cellCenterY - crossHalf, frameL, cellCenterY + crossHalf), brushHandle.Get());
+    ctx->FillRectangle(D2D1::RectF(frameR, cellCenterY - crossHalf, left + panelW, cellCenterY + crossHalf), brushHandle.Get());
+    ctx->FillRectangle(D2D1::RectF(cellCenterX - crossHalf, top, cellCenterX + crossHalf, frameT), brushHandle.Get());
+    ctx->FillRectangle(D2D1::RectF(cellCenterX - crossHalf, frameB, cellCenterX + crossHalf, top + imageH), brushHandle.Get());
+
+    // During an active drag, leave the top-left quadrant plus the LEFT and TOP
+    // cross arms clear. Apply the same 40% black veil to the other three
+    // quadrants and to the RIGHT and BOTTOM arms. The center target stays clear.
     if (cap->stage == WinCap::CapStage::Select && cap->isPress) {
         ComPtr<ID2D1SolidColorBrush> quadrantShade;
         ctx->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::Black, .40f), quadrantShade.GetAddressOf());
         if (quadrantShade) {
+            // Three de-emphasized quadrants.
             ctx->FillRectangle(D2D1::RectF(frameR, top, left + panelW, frameT), quadrantShade.Get());
             ctx->FillRectangle(D2D1::RectF(left, frameB, frameL, top + imageH), quadrantShade.Get());
             ctx->FillRectangle(D2D1::RectF(frameR, frameB, left + panelW, top + imageH), quadrantShade.Get());
+            // Right and bottom arms use the same veil; left and top remain clear.
+            ctx->FillRectangle(D2D1::RectF(frameR, cellCenterY - crossHalf, left + panelW, cellCenterY + crossHalf), quadrantShade.Get());
+            ctx->FillRectangle(D2D1::RectF(cellCenterX - crossHalf, frameB, cellCenterX + crossHalf, top + imageH), quadrantShade.Get());
         }
     }
-
-    // Cross arms end at the OUTSIDE edge of the black frame; nothing is
-    // painted across the transparent center target.
-    ctx->FillRectangle(D2D1::RectF(left, cellCenterY - crossHalf, frameL, cellCenterY + crossHalf), brushAccentSoft.Get());
-    ctx->FillRectangle(D2D1::RectF(frameR, cellCenterY - crossHalf, left + panelW, cellCenterY + crossHalf), brushAccentSoft.Get());
-    ctx->FillRectangle(D2D1::RectF(cellCenterX - crossHalf, top, cellCenterX + crossHalf, frameT), brushAccentSoft.Get());
-    ctx->FillRectangle(D2D1::RectF(cellCenterX - crossHalf, frameB, cellCenterX + crossHalf, top + imageH), brushAccentSoft.Get());
 
     // Four equal filled bars guarantee the top/bottom/left/right border has
     // identical thickness. Do not fill the center.
