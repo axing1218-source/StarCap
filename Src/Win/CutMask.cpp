@@ -815,7 +815,7 @@ void CutMask::paintHelp(ID2D1DeviceContext* ctx)
 
     const float scale = win->dpi;
     const bool dragging = cap->isPress;
-    const float panelW = (dragging ? 380.f : 405.f) * scale;
+    const float panelW = (dragging ? 342.f : 362.f) * scale;
     const float panelH = (dragging ? 124.f : 226.f) * scale;
 
     // Use the monitor work area rather than the fullscreen capture window so
@@ -839,7 +839,6 @@ void CutMask::paintHelp(ID2D1DeviceContext* ctx)
 
     const auto panel = D2D1::RectF(left, top, left + panelW, top + panelH);
     ctx->FillRectangle(panel, brushHelpBg.Get());
-    ctx->DrawRectangle(panel, brushKeyBorder.Get(), std::max(1.f, scale));
 
     auto d2d = Ling::D2D::get();
     auto drawRow = [&](float rowY, const std::vector<std::wstring>& keys, const std::wstring& desc) {
