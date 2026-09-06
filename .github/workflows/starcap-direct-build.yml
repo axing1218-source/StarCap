@@ -10,6 +10,7 @@ on:
       - feature/long-capture-v2-phase1
       - feature/long-capture-v2-phase2
       - feature/long-capture-v2-phase25
+      - feature/long-capture-v2-phase3
 
 jobs:
   build:
@@ -29,6 +30,12 @@ jobs:
         shell: pwsh
         run: |
           python tools/patch_long_capture_phase25.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Apply Long Capture V2 Phase 3 chunk-buffer patch
+        shell: pwsh
+        run: |
+          python tools/patch_long_capture_phase3.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify StarCap source identity
