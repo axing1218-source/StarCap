@@ -611,7 +611,6 @@ void WinCap::startEditor()
     auto& maskRect = cutMask->maskRect;
     // The annotation editor uses the same proven shape engine as WinPin, but
     // opens in a dedicated fixed-canvas mode instead of desktop-pin mode.
-    ToolMain::queueEditorOpen();
     WinPin::initEditor(int(maskRect.left) + x, int(maskRect.top) + y,
         int(maskRect.right - maskRect.left), int(maskRect.bottom - maskRect.top));
     close();
