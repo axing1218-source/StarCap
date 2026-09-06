@@ -1,0 +1,157 @@
+name: Patch Help Keycaps And Pin Context V2
+
+on:
+  push:
+    branches:
+      - feature/snipaste-capture-ux
+    paths:
+      - .github/workflows/patch-help-keycaps-pin-context-v2.yml
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/snipaste-capture-ux
+          fetch-depth: 0
+
+      - name: Apply source fixes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          # 1) Tutorial panel: pure white hard-edged key caps + larger descriptions.
+          p = Path('Src/Win/CutMask.cpp')
+          text = p.read_text(encoding='utf-8')
+          text = text.replace(
+              'd2d->deviceContext->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White, .64f), brushKeyBorder.GetAddressOf());',
+              'd2d->deviceContext->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), brushKeyBorder.GetAddressOf());',
+              1)
+          text = text.replace('    const float descGap = 10.f * scale;\n    const float keyH = 21.f * scale;\n',
+                              '    const float descGap = 12.f * scale;\n    const float keyH = 22.f * scale;\n', 1)
+          text = text.replace('    const float step = 34.f * scale;\n', '    const float step = 38.f * scale;\n', 1)
+          text = text.replace('auto descLayout = d2d->makeTextLayout(row.desc, 12.f * scale);',
+                              'auto descLayout = d2d->makeTextLayout(row.desc, 16.f * scale);')
+          old = '''  ctx->DrawRectangle(D2D1::RectF(x, rowY, x + kw, rowY + keyH),
+      brushKeyBorder.Get(), std::max(1.f, scale));
+  ctx->DrawTextLayout({ x + (kw - km.width) * .5f, rowY + 1.5f * scale },
+      keyLayout.Get(), brushText.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+'''
+          new = '''  // Pure-white, one-physical-pixel hard frame. Round every edge to a
+  // device pixel and build the frame from four filled bars so there is no
+  // anti-aliased/foggy edge at any DPI.
+  const float kl = std::round(x);
+  const float kt = std::round(rowY);
+  const float kr = std::round(x + kw);
+  const float kb = std::round(rowY + keyH);
+  constexpr float keyBorderPx = 1.f;
+  ctx->FillRectangle(D2D1::RectF(kl, kt, kr, kt + keyBorderPx), brushKeyBorder.Get());
+  ctx->FillRectangle(D2D1::RectF(kl, kb - keyBorderPx, kr, kb), brushKeyBorder.Get());
+  ctx->FillRectangle(D2D1::RectF(kl, kt + keyBorderPx, kl + keyBorderPx, kb - keyBorderPx), brushKeyBorder.Get());
+  ctx->FillRectangle(D2D1::RectF(kr - keyBorderPx, kt + keyBorderPx, kr, kb - keyBorderPx), brushKeyBorder.Get());
+  ctx->DrawTextLayout({ x + (kw - km.width) * .5f, rowY + 1.5f * scale },
+      keyLayout.Get(), brushText.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+'''
+          if old not in text:
+              raise SystemExit('key-cap drawing block not found')
+          text = text.replace(old, new, 1)
+          text = text.replace(
+              '''        if (descLayout) ctx->DrawTextLayout({ x + descGap, rowY + 1.5f * scale },
+  descLayout.Get(), brushText.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);''',
+              '''        if (descLayout) ctx->DrawTextLayout({ x + descGap, rowY - 0.5f * scale },
+  descLayout.Get(), brushText.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);''',
+              1)
+          p.write_text(text, encoding='utf-8')
+
+          # 2) Make the context menu callable directly by WinPin.
+          p = Path('Src/Tool/ToolMain.h')
+          text = p.read_text(encoding='utf-8')
+          text = text.replace('''\tfloat getBtnCenterX();
+\tvoid cancelSelect();
+public:
+''', '''\tfloat getBtnCenterX();
+\tvoid cancelSelect();
+\tvoid showPinContextMenu();
+public:
+''', 1)
+          text = text.replace('\tvoid showPinContextMenu();\nprivate:\n\tWinPin* win;', 'private:\n\tWinPin* win;', 1)
+          p.write_text(text, encoding='utf-8')
+
+          # 3) Stop installing the old delayed mouse hooks. Right click is now
+          # handled synchronously by WinPin itself, which is much more reliable.
+          p = Path('Src/Tool/ToolMain.cpp')
+          text = p.read_text(encoding='utf-8')
+          text = text.replace('\tSetTimer(hwnd, pinHookTimerId, 1, nullptr);\n', '', 1)
+          p.write_text(text, encoding='utf-8')
+
+          # 4) WinPin owns the actual mouse event. Right-click opens the menu
+          # directly; left-click/drag never toggles toolbar visibility.
+          p = Path('Src/Win/WinPin.cpp')
+          text = p.read_text(encoding='utf-8')
+          start = text.index('\tif (isRight) {', text.index('void WinPin::onDown'))
+          end_marker = '\t// 双击判定得自己做'
+          end = text.index(end_marker, start)
+          replacement = '''\tif (isRight) {
+\t\t// Context-menu behavior is owned by the pin window itself. Do not toggle
+\t\t// the editing toolbar here; the menu's "显示工具栏" item is the single
+\t\t// source of truth for toolbar visibility.
+\t\tif (toolMain) toolMain->showPinContextMenu();
+\t\treturn;
+\t}
+'''
+          text = text[:start] + replacement + text[end:]
+          text = text.replace('''\tif (toolMain->curId == L"") { //没选画笔，左键是拖窗口，拖的时候把工具条收起来
+\t\ttoolMain->hide();
+\t\treturn;
+\t}
+''', '''\tif (toolMain->curId == L"") { // 没选画笔，左键只负责拖窗口，不改变工具栏显隐
+\t\treturn;
+\t}
+''', 1)
+          old_up = '''\tif (toolMain->curId == L"") {
+\t\t// 没选画笔，这一下要么是拖完窗口（按新位置重排工具条），要么只是点了一下 ——
+\t\t// 两种情况都把 ToolMain 显示出来：拖动期间它是藏着的，右键之后它也是藏着的，
+\t\t// 左键点一下就是"我还要用工具条"。ToolSub 由 curId 驱动，这会儿仍然不该出来，
+\t\t// layoutTools 里已经管了
+\t\tlayoutTools();
+\t\ttoolMain->show();
+\t}
+'''
+          new_up = '''\tif (toolMain->curId == L"") {
+\t\t// A plain left click/drag must never reveal the editor. Reposition any
+\t\t// already-visible toolbar after moving the pin, but preserve visibility.
+\t\tlayoutTools();
+\t}
+'''
+          if old_up not in text:
+              raise SystemExit('WinPin onUp toolbar block not found')
+          text = text.replace(old_up, new_up, 1)
+          p.write_text(text, encoding='utf-8')
+
+      - name: Commit source fixes
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Src/Win/CutMask.cpp Src/Win/WinPin.cpp Src/Tool/ToolMain.cpp Src/Tool/ToolMain.h
+          git commit -m "Sharpen tutorial keycaps and fix pin context menu"
+          git push origin HEAD:feature/snipaste-capture-ux
+
+      - name: Build fixed feature branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh workflow run starcap-direct-build.yml --ref feature/snipaste-capture-ux
+
+      - name: Remove temporary workflow
+        shell: bash
+        run: |
+          git pull --rebase origin feature/snipaste-capture-ux
+          git rm .github/workflows/patch-help-keycaps-pin-context-v2.yml
+          git commit -m "Remove temporary tutorial and pin patch workflow"
+          git push origin HEAD:feature/snipaste-capture-ux
