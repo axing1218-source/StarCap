@@ -177,39 +177,78 @@ void ToolMain::applyPinToolbarVisibility()
 
 void ToolMain::showPinContextMenu()
 {
-	if (!win || !win->hwnd) return;
-	HMENU menu = CreatePopupMenu();
-	if (!menu) return;
-	constexpr UINT ID_TOOLBAR = 6101;
-	constexpr UINT ID_COPY = 6102;
-	constexpr UINT ID_SAVE = 6103;
-	constexpr UINT ID_CLOSE = 6104;
-	AppendMenuW(menu, MF_STRING, ID_TOOLBAR, pinToolbarVisible ? L"隐藏编辑工具栏" : L"显示编辑工具栏");
-	AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-	AppendMenuW(menu, MF_STRING, ID_COPY, L"复制图片");
-	AppendMenuW(menu, MF_STRING, ID_SAVE, L"另存为...");
-	AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-	AppendMenuW(menu, MF_STRING, ID_CLOSE, L"关闭贴图");
+    if (!win || !win->hwnd) return;
 
-	POINT pt{};
-	GetCursorPos(&pt);
-	SetForegroundWindow(win->hwnd);
-	const UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
-		pt.x, pt.y, 0, win->hwnd, nullptr);
-	DestroyMenu(menu);
-	PostMessageW(win->hwnd, WM_NULL, 0, 0);
+    HMENU menu = CreatePopupMenu();
+    HMENU zoomMenu = CreatePopupMenu();
+    if (!menu || !zoomMenu) {
+        if (zoomMenu) DestroyMenu(zoomMenu);
+        if (menu) DestroyMenu(menu);
+        return;
+    }
 
-	if (cmd == ID_TOOLBAR) {
-		pinToolbarVisible = !pinToolbarVisible;
-		applyPinToolbarVisibility();
-		return;
-	}
-	if (cmd == ID_COPY) { win->copyToClipboard(); return; }
-	if (cmd == ID_SAVE) { win->saveToFile(); return; }
-	if (cmd == ID_CLOSE) { win->close(); return; }
-	applyPinToolbarVisibility();
+    constexpr UINT ID_COPY = 6101;
+    constexpr UINT ID_SAVE = 6102;
+    constexpr UINT ID_TOOLBAR = 6103;
+    constexpr UINT ID_CLOSE = 6104;
+    constexpr UINT ID_ZOOM_25 = 6201;
+    constexpr UINT ID_ZOOM_50 = 6202;
+    constexpr UINT ID_ZOOM_75 = 6203;
+    constexpr UINT ID_ZOOM_100 = 6204;
+    constexpr UINT ID_ZOOM_125 = 6205;
+    constexpr UINT ID_ZOOM_150 = 6206;
+    constexpr UINT ID_ZOOM_200 = 6207;
+
+    AppendMenuW(menu, MF_STRING, ID_COPY, L"复制图像");
+    AppendMenuW(menu, MF_STRING, ID_SAVE, L"图像另存为...");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING | (pinToolbarVisible ? MF_CHECKED : MF_UNCHECKED), ID_TOOLBAR, L"显示工具栏");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+
+    struct ZoomItem { UINT id; int percent; float value; };
+    const ZoomItem zooms[] = {
+        { ID_ZOOM_25, 25, .25f }, { ID_ZOOM_50, 50, .50f }, { ID_ZOOM_75, 75, .75f },
+        { ID_ZOOM_100, 100, 1.00f }, { ID_ZOOM_125, 125, 1.25f },
+        { ID_ZOOM_150, 150, 1.50f }, { ID_ZOOM_200, 200, 2.00f }
+    };
+    for (const auto& z : zooms) {
+        const bool checked = std::abs(win->scale - z.value) < .01f;
+        AppendMenuW(zoomMenu, MF_STRING | (checked ? MF_CHECKED : MF_UNCHECKED),
+  z.id, std::format(L"{}%", z.percent).c_str());
+    }
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)zoomMenu, L"缩放");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, ID_CLOSE, L"关闭");
+
+    POINT screenPt{};
+    GetCursorPos(&screenPt);
+    SetForegroundWindow(win->hwnd);
+    const UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
+        screenPt.x, screenPt.y, 0, win->hwnd, nullptr);
+    DestroyMenu(menu); // destroys the attached zoom submenu as well
+    PostMessageW(win->hwnd, WM_NULL, 0, 0);
+
+    if (cmd == ID_TOOLBAR) {
+        pinToolbarVisible = !pinToolbarVisible;
+        applyPinToolbarVisibility();
+        return;
+    }
+    if (cmd == ID_COPY) { win->copyToClipboard(); return; }
+    if (cmd == ID_SAVE) { win->saveToFile(); return; }
+    if (cmd == ID_CLOSE) { win->close(); return; }
+
+    float zoom = 0.f;
+    for (const auto& z : zooms) if (cmd == z.id) { zoom = z.value; break; }
+    if (zoom > 0.f) {
+        POINT anchor = screenPt;
+        ScreenToClient(win->hwnd, &anchor);
+        anchor.x = std::clamp<LONG>(anchor.x, 0, std::max<LONG>(0, (LONG)std::lround(win->w) - 1));
+        anchor.y = std::clamp<LONG>(anchor.y, 0, std::max<LONG>(0, (LONG)std::lround(win->h) - 1));
+        win->applyScale(zoom, anchor);
+    }
+
+    applyPinToolbarVisibility();
 }
-
 void ToolMain::applyQueuedInitialTool()
 {
 	if (queuedInitialTool.empty()) return;

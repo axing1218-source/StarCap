@@ -326,24 +326,8 @@ void WinPin::onDown(POINT pos, BOOL isRight)
 	// 编辑文本时，落在文本框里的点击整个交给 TextBox（它自己订阅了窗口的鼠标事件）。
 	// 这里不能抢先 SetCapture / 置 isMouseDown，否则拖选文本会被当成拖 shape。
 	if (editingText && textBox && textBox->isPosIn(pos)) return;
-	if (isRight) {
-		// 右键在"有工具条"和"只剩图"这两个状态之间来回切。
-		// 藏着的时候（上一次右键收起来的）就把它请回来。位置先重排一遍：
-		// 藏着的这段时间里窗口可能被 Ctrl+滚轮缩放过，工具条的落点跟着变了
-		if (!IsWindowVisible(toolMain->hwnd)) {
-			layoutTools();
-			toolMain->show();
-			return;
-		}
-		// 显示着：清掉画笔选中态，把两条工具条一起收起来，只剩图本身。
-		// cancelSelect 里已经顺手隐藏了 ToolSub 并重排整组，但它在 curId 本来就空时会提前返回，
-		// 所以 ToolSub 这一下自己再收一次，右键的效果与当时选没选画笔无关。
-		// 左键点一下（抬手时，见 onUp）也能把 ToolMain 请回来
-		toolMain->cancelSelect();
-		toolMain->hide();
-		toolSub->hideTools();
-		return;
-	}
+	if (isRight) return;
+
 	// 双击判定得自己做，做法同 WinCap::onDown：Ling 的窗口类没带 CS_DBLCLKS，
 	// WM_LBUTTONDBLCLK 根本不会来，只能拿系统的双击间隔和双击判定框自己认。
 	// 与 WinCap 唯一的不同是这里比屏幕坐标而不是客户区坐标：拖动贴图窗口时窗口跟着光标走，
@@ -445,12 +429,10 @@ void WinPin::onUp(POINT pos, BOOL isRight)
 	// 这一下按下有没有新建出一个留得住的元素：紧接着来第二下凑成双击时要把它撤掉（见 onDown）
 	prevPressCreatedShape = false;
 	if (toolMain->curId == L"") {
-		// 没选画笔，这一下要么是拖完窗口（按新位置重排工具条），要么只是点了一下 ——
-		// 两种情况都把 ToolMain 显示出来：拖动期间它是藏着的，右键之后它也是藏着的，
-		// 左键点一下就是"我还要用工具条"。ToolSub 由 curId 驱动，这会儿仍然不该出来，
-		// layoutTools 里已经管了
+		// Plain pin: a click/drag must never summon the editor toolbar.
+		// ToolMain owns the desired visibility state and restores it after a drag
+		// only when the user explicitly entered editor mode / enabled it from the menu.
 		layoutTools();
-		toolMain->show();
 	}
 	else if (shapeHover) {
 		// 新建的这一笔按下马上弹起，什么也没画出来：直接丢掉，

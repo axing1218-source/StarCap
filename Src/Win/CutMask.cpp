@@ -815,11 +815,60 @@ void CutMask::paintHelp(ID2D1DeviceContext* ctx)
 
     const float scale = win->dpi;
     const bool dragging = cap->isPress;
-    const float panelW = (dragging ? 342.f : 362.f) * scale;
-    const float panelH = (dragging ? 124.f : 226.f) * scale;
+    auto d2d = Ling::D2D::get();
 
-    // Use the monitor work area rather than the fullscreen capture window so
-    // this helper always sits above a bottom taskbar (and respects side taskbars).
+    struct HelpRow
+    {
+        std::vector<std::wstring> keys;
+        std::wstring desc;
+    };
+
+    std::vector<HelpRow> rows{
+        {{ L"W", L"A", L"S", L"D" }, L"移动鼠标指针 1 像素"},
+        {{ L"Tab" }, L"切换窗口 / 界面元素检测"},
+        {{ L"Ctrl", L"A" }, L"当前屏幕 / 全屏"}
+    };
+    if (!dragging) {
+        rows.push_back({ { L"R", L"Shift", L"R" }, L"使用上一次截图区域" });
+        rows.push_back({ { L",", L"." }, L"回溯截图区域历史" });
+        rows.push_back({ { L"C", L"Shift" }, L"复制颜色 / 切换 RGB/HEX" });
+    }
+
+    const float sidePad = 13.f * scale;
+    const float keyGap = 5.f * scale;
+    const float descGap = 10.f * scale;
+    const float keyH = 21.f * scale;
+    const float firstPad = 14.f * scale;
+    const float bottomPad = 14.f * scale;
+    const float step = 34.f * scale;
+
+    // Measure exactly what will be painted. The longest rendered row determines
+    // the panel width, then the same sidePad is added to both sides. This makes
+    // the W key-cap's left edge -> panel edge distance equal to the final glyph
+    // -> right panel edge distance, rather than relying on a guessed fixed width.
+    float contentW = 0.f;
+    for (const auto& row : rows) {
+        float rowW = 0.f;
+        for (size_t i = 0; i < row.keys.size(); ++i) {
+  auto keyLayout = d2d->makeTextLayout(row.keys[i], 11.5f * scale);
+  if (!keyLayout) continue;
+  DWRITE_TEXT_METRICS km{};
+  keyLayout->GetMetrics(&km);
+  rowW += std::max(21.f * scale, km.width + 9.f * scale);
+  if (i + 1 < row.keys.size()) rowW += keyGap;
+        }
+        auto descLayout = d2d->makeTextLayout(row.desc, 12.f * scale);
+        if (descLayout) {
+  DWRITE_TEXT_METRICS dm{};
+  descLayout->GetMetrics(&dm);
+  rowW += descGap + dm.width;
+        }
+        contentW = std::max(contentW, rowW);
+    }
+
+    const float panelW = sidePad + contentW + sidePad;
+    const float panelH = firstPad + (rows.size() - 1) * step + keyH + bottomPad;
+
     POINT cursorScreen{};
     GetCursorPos(&cursorScreen);
     HMONITOR monitor = MonitorFromPoint(cursorScreen, MONITOR_DEFAULTTONEAREST);
@@ -839,40 +888,32 @@ void CutMask::paintHelp(ID2D1DeviceContext* ctx)
 
     const auto panel = D2D1::RectF(left, top, left + panelW, top + panelH);
     ctx->FillRectangle(panel, brushHelpBg.Get());
+    // No outer white stroke. Key-cap strokes remain.
 
-    auto d2d = Ling::D2D::get();
-    auto drawRow = [&](float rowY, const std::vector<std::wstring>& keys, const std::wstring& desc) {
-        float x = left + 13.f * scale;
-        for (const auto& key : keys) {
-            auto keyLayout = d2d->makeTextLayout(key, 11.5f * scale);
-            if (!keyLayout) continue;
-            DWRITE_TEXT_METRICS km{};
-            keyLayout->GetMetrics(&km);
-            const float kw = std::max(21.f * scale, km.width + 9.f * scale);
-            const float kh = 21.f * scale;
-            ctx->DrawRectangle(D2D1::RectF(x, rowY, x + kw, rowY + kh),
-                brushKeyBorder.Get(), std::max(1.f, scale));
-            ctx->DrawTextLayout({ x + (kw - km.width) * .5f, rowY + 1.5f * scale },
-                keyLayout.Get(), brushText.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
-            x += kw + 5.f * scale;
+    auto drawRow = [&](float rowY, const HelpRow& row) {
+        float x = left + sidePad;
+        for (size_t i = 0; i < row.keys.size(); ++i) {
+  auto keyLayout = d2d->makeTextLayout(row.keys[i], 11.5f * scale);
+  if (!keyLayout) continue;
+  DWRITE_TEXT_METRICS km{};
+  keyLayout->GetMetrics(&km);
+  const float kw = std::max(21.f * scale, km.width + 9.f * scale);
+  ctx->DrawRectangle(D2D1::RectF(x, rowY, x + kw, rowY + keyH),
+      brushKeyBorder.Get(), std::max(1.f, scale));
+  ctx->DrawTextLayout({ x + (kw - km.width) * .5f, rowY + 1.5f * scale },
+      keyLayout.Get(), brushText.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+  x += kw;
+  if (i + 1 < row.keys.size()) x += keyGap;
         }
-        auto descLayout = d2d->makeTextLayout(desc, 12.f * scale);
-        if (descLayout) ctx->DrawTextLayout({ x + 10.f * scale, rowY + 1.5f * scale },
-            descLayout.Get(), brushText.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+        auto descLayout = d2d->makeTextLayout(row.desc, 12.f * scale);
+        if (descLayout) ctx->DrawTextLayout({ x + descGap, rowY + 1.5f * scale },
+  descLayout.Get(), brushText.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
     };
 
-    const float firstY = top + 14.f * scale;
-    const float step = 34.f * scale;
-    drawRow(firstY + step * 0, { L"W",L"A",L"S",L"D" }, L"移动鼠标指针 1 像素");
-    drawRow(firstY + step * 1, { L"Tab" }, L"切换窗口 / 界面元素检测");
-    drawRow(firstY + step * 2, { L"Ctrl",L"A" }, L"当前屏幕 / 全屏");
-    if (!dragging) {
-        drawRow(firstY + step * 3, { L"R",L"Shift",L"R" }, L"使用上一次截图区域");
-        drawRow(firstY + step * 4, { L",",L"." }, L"回溯截图区域历史");
-        drawRow(firstY + step * 5, { L"C",L"Shift" }, L"复制颜色 / 切换 RGB/HEX");
-    }
+    const float firstY = top + firstPad;
+    for (size_t i = 0; i < rows.size(); ++i)
+        drawRow(firstY + step * (float)i, rows[i]);
 }
-
 void CutMask::suppressLegacyMagnifier(ID2D1DeviceContext* ctx)
 {
 	auto* cap = static_cast<WinCap*>(win);

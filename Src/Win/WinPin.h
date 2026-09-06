@@ -10,6 +10,7 @@ struct StarCapPinTransform;
 class WinPin : public Ling::WinBase
 {
 	friend struct StarCapPinTransform;
+	friend class ToolMain;
 public:
 	~WinPin();
 	static void init(int x, int y, int w, int h);
