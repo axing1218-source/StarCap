@@ -764,7 +764,7 @@ void CutMask::paintMagnifierPanel(ID2D1DeviceContext* ctx, POINT live, float lef
     // white seam can leak between the cross and the center target.
     if (cap->stage == WinCap::CapStage::Select && cap->isPress) {
         ComPtr<ID2D1SolidColorBrush> quadrantShade;
-        ctx->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::Black, .40f), quadrantShade.GetAddressOf());
+        ctx->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::Black, .55f), quadrantShade.GetAddressOf());
         if (quadrantShade) {
             const float crossRight = cellCenterX + crossHalf;
             const float crossBottom = cellCenterY + crossHalf;
