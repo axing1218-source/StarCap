@@ -4,6 +4,7 @@
 
 class WinCap;
 class ToolLong;
+class LongOverlayTracker;
 
 class CapLong
 {
@@ -119,6 +120,7 @@ private:
 private:
     WinCap* win{ nullptr };
     std::unique_ptr<ToolLong> tool;
+    std::unique_ptr<LongOverlayTracker> overlayTracker;
 
     bool isCapturing{ false };
     bool isFinish{ false };
