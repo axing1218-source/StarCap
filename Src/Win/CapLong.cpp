@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <numeric>
 #include "CapLong.h"
+#include "LongOverlay.h"
 #include "WinCap.h"
 #include "CutMask.h"
 #include "WinPin.h"
@@ -321,6 +322,7 @@ void CapLong::firstStep()
     imgW = static_cast<int>(maskRect.right - maskRect.left);
     imgH = static_cast<int>(maskRect.bottom - maskRect.top);
     resultH = imgH;
+    overlayTracker = std::make_unique<LongOverlayTracker>(imgW, imgH);
     capStartPos.x = static_cast<int>(maskRect.left);
     capStartPos.y = static_cast<int>(maskRect.top);
     ClientToScreen(win->hwnd, &capStartPos);
@@ -406,6 +408,18 @@ void CapLong::processFrame(std::vector<BYTE> data)
             pauseAuto(L"ambiguous-seam");
         }
         return;
+    }
+
+    if (overlayTracker) {
+        int bodyTop = slicesInitialized ? staticTop : match.staticTop;
+        int bodyBottom = imgH - (slicesInitialized ? staticBottom : match.staticBottom);
+        auto overlay = overlayTracker->observe(committedFrame, data, match.offset, bodyTop, bodyBottom);
+        if (overlay.currentBlocks > 0 || overlay.persistentBlocks > 0) {
+            StarCapDiag::append(std::format(
+                L"[long-next] overlay candidates={} components={} currentBlocks={} persistentBlocks={} offset={}",
+                overlay.candidateBlocks, overlay.acceptedComponents, overlay.currentBlocks,
+                overlay.persistentBlocks, match.offset));
+        }
     }
 
     rejectedFrames = 0;
@@ -568,6 +582,14 @@ void CapLong::appendBodyRows(const std::vector<BYTE>& frame, int sourceY, int ro
     chunk.height = rows;
     chunk.pixels.resize(static_cast<size_t>(rowBytes) * rows);
     CopyMemory(chunk.pixels.data(), frame.data() + static_cast<size_t>(sourceY) * rowBytes, chunk.pixels.size());
+    if (overlayTracker) {
+        int sanitizedPixels = overlayTracker->sanitizeChunk(chunk.pixels, sourceY, rows, frame);
+        if (sanitizedPixels > 0) {
+            StarCapDiag::append(std::format(
+                L"[long-next] overlay-sanitize sourceY={} rows={} pixels={}",
+                sourceY, rows, sanitizedPixels));
+        }
+    }
     bodyChunks.push_back(std::move(chunk));
     bodyHeight += rows;
     resultH = staticTop + bodyHeight + staticBottom;
