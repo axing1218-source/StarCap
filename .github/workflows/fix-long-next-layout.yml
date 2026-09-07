@@ -17,47 +17,31 @@ jobs:
           fetch-depth: 0
 
       - name: Apply source-level layout type fix
-        shell: python
+        shell: bash
         run: |
+          python3 - <<'PY'
           from pathlib import Path
 
           path = Path('Src/Win/CapLong.cpp')
           text = path.read_text(encoding='utf-8')
-          old = '''    int gap = std::max(2, static_cast<int>(2 * win->dpi));
-    int toolW = tool->w;
-    int toolH = tool->h;
-
-    int rightX = static_cast<int>(r.right) + gap;
-    int leftX = static_cast<int>(r.left) - toolW - gap;
-    int x = 0;
-    if (rightX + toolW <= win->w) x = rightX;
-    else if (leftX >= 0) x = leftX;
-    else x = std::max(0, std::min(win->w - toolW, static_cast<int>(r.right) - toolW - gap));
-
-    int y = static_cast<int>(r.bottom) - toolH;
-    y = std::max(0, std::min(win->h - toolH, y));
-'''
-          new = '''    int gap = std::max(2, static_cast<int>(2 * win->dpi));
-    int toolW = static_cast<int>(tool->w);
-    int toolH = static_cast<int>(tool->h);
-    int winW = static_cast<int>(win->w);
-    int winH = static_cast<int>(win->h);
-
-    int rightX = static_cast<int>(r.right) + gap;
-    int leftX = static_cast<int>(r.left) - toolW - gap;
-    int x = 0;
-    if (rightX + toolW <= winW) x = rightX;
-    else if (leftX >= 0) x = leftX;
-    else x = std::max(0, std::min(winW - toolW, static_cast<int>(r.right) - toolW - gap));
-
-    int y = static_cast<int>(r.bottom) - toolH;
-    y = std::max(0, std::min(winH - toolH, y));
-'''
-          if old not in text:
-              print('Layout block already fixed; nothing to do.')
+          replacements = {
+              '    int toolW = tool->w;\n': '    int toolW = static_cast<int>(tool->w);\n',
+              '    int toolH = tool->h;\n': '    int toolH = static_cast<int>(tool->h);\n    int winW = static_cast<int>(win->w);\n    int winH = static_cast<int>(win->h);\n',
+              '    if (rightX + toolW <= win->w) x = rightX;\n': '    if (rightX + toolW <= winW) x = rightX;\n',
+              '    else x = std::max(0, std::min(win->w - toolW, static_cast<int>(r.right) - toolW - gap));\n': '    else x = std::max(0, std::min(winW - toolW, static_cast<int>(r.right) - toolW - gap));\n',
+              '    y = std::max(0, std::min(win->h - toolH, y));\n': '    y = std::max(0, std::min(winH - toolH, y));\n',
+          }
+          changed = False
+          for old, new in replacements.items():
+              if old in text:
+                  text = text.replace(old, new, 1)
+                  changed = True
+          if changed:
+              path.write_text(text, encoding='utf-8')
+              print('Updated CapLong.cpp layout dimensions.')
           else:
-              path.write_text(text.replace(old, new, 1), encoding='utf-8')
-              print('Updated CapLong.cpp layout block.')
+              print('Layout dimensions already fixed.')
+          PY
 
       - name: Commit fix when needed
         shell: bash
