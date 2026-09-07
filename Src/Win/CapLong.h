@@ -32,6 +32,8 @@ public:
     void startAutoScroll();
     void toggleAutoScroll();
     bool isAutoScrolling() const { return autoScroll; }
+    void hotkeyEnter();
+    void hotkeyEscape();
 
 private:
     enum class CaptureState
@@ -113,8 +115,6 @@ private:
 
     void installControlHook();
     void uninstallControlHook();
-    void hotkeyEnter();
-    void hotkeyEscape();
 
 private:
     WinCap* win{ nullptr };
