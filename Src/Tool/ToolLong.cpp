@@ -31,6 +31,9 @@ ToolLong::~ToolLong()
 void ToolLong::onCreated()
 {
     tip = std::make_unique<Tip>(this);
+    // The tooltip is a separate top-level window. Keep it visible to the user, but never let
+    // long-capture frame grabs record it as page content.
+    tip->excludeFromCapture();
     body->setBg(0xFFFFFFFF);
     body->setBorder(1.f, 0xA8A8A8ff);
     body->setAlignItems(Ling::Align::Center);
