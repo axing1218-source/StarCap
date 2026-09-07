@@ -737,18 +737,20 @@ void CapLong::layoutTool()
     if (!tool) return;
     auto& r = win->cutMask->maskRect;
     int gap = std::max(2, static_cast<int>(2 * win->dpi));
-    int toolW = tool->w;
-    int toolH = tool->h;
+    int toolW = static_cast<int>(tool->w);
+    int toolH = static_cast<int>(tool->h);
+    int winW = static_cast<int>(win->w);
+    int winH = static_cast<int>(win->h);
 
     int rightX = static_cast<int>(r.right) + gap;
     int leftX = static_cast<int>(r.left) - toolW - gap;
     int x = 0;
-    if (rightX + toolW <= win->w) x = rightX;
+    if (rightX + toolW <= winW) x = rightX;
     else if (leftX >= 0) x = leftX;
-    else x = std::max(0, std::min(win->w - toolW, static_cast<int>(r.right) - toolW - gap));
+    else x = std::max(0, std::min(winW - toolW, static_cast<int>(r.right) - toolW - gap));
 
     int y = static_cast<int>(r.bottom) - toolH;
-    y = std::max(0, std::min(win->h - toolH, y));
+    y = std::max(0, std::min(winH - toolH, y));
 
     POINT pos{ x, y };
     ClientToScreen(win->hwnd, &pos);
