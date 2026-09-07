@@ -11,6 +11,7 @@ on:
       - feature/long-capture-v2-phase2
       - feature/long-capture-v2-phase25
       - feature/long-capture-v2-phase3
+      - feature/long-capture-v2-stability
 
 jobs:
   build:
@@ -36,6 +37,12 @@ jobs:
         shell: pwsh
         run: |
           python tools/run_patch_long_capture_phase3.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Apply Long Capture stability pass
+        shell: pwsh
+        run: |
+          python tools/patch_long_capture_stability.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify StarCap source identity
