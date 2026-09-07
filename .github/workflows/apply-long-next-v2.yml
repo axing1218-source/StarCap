@@ -1,0 +1,75 @@
+name: Apply Long Capture Next v2
+
+on:
+  push:
+    branches:
+      - feature/long-capture-next-v2
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Integrate edge overlay tracker into CapLong source
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('Src/Win/CapLong.cpp')
+          text = path.read_text(encoding='utf-8')
+          original = text
+
+          old = '#include "CapLong.h"\n#include "WinCap.h"\n'
+          new = '#include "CapLong.h"\n#include "LongOverlay.h"\n#include "WinCap.h"\n'
+          if '#include "LongOverlay.h"' not in text:
+              if old not in text:
+                  raise SystemExit('CapLong include anchor not found')
+              text = text.replace(old, new, 1)
+
+          old = '''    imgW = static_cast<int>(maskRect.right - maskRect.left);\n    imgH = static_cast<int>(maskRect.bottom - maskRect.top);\n    resultH = imgH;\n'''
+          new = '''    imgW = static_cast<int>(maskRect.right - maskRect.left);\n    imgH = static_cast<int>(maskRect.bottom - maskRect.top);\n    resultH = imgH;\n    overlayTracker = std::make_unique<LongOverlayTracker>(imgW, imgH);\n'''
+          if 'overlayTracker = std::make_unique<LongOverlayTracker>' not in text:
+              if old not in text:
+                  raise SystemExit('firstStep overlay anchor not found')
+              text = text.replace(old, new, 1)
+
+          old = '''    rejectedFrames = 0;\n    noProgressFrames = 0;\n    commitFrame(data, match);\n'''
+          new = '''    if (overlayTracker) {\n        int bodyTop = slicesInitialized ? staticTop : match.staticTop;\n        int bodyBottom = imgH - (slicesInitialized ? staticBottom : match.staticBottom);\n        auto overlay = overlayTracker->observe(committedFrame, data, match.offset, bodyTop, bodyBottom);\n        if (overlay.currentBlocks > 0 || overlay.persistentBlocks > 0) {\n            StarCapDiag::append(std::format(\n                L"[long-next] overlay candidates={} components={} currentBlocks={} persistentBlocks={} offset={}",\n                overlay.candidateBlocks, overlay.acceptedComponents, overlay.currentBlocks,\n                overlay.persistentBlocks, match.offset));\n        }\n    }\n\n    rejectedFrames = 0;\n    noProgressFrames = 0;\n    commitFrame(data, match);\n'''
+          if '[long-next] overlay candidates=' not in text:
+              if old not in text:
+                  raise SystemExit('processFrame overlay anchor not found')
+              text = text.replace(old, new, 1)
+
+          old = '''    chunk.pixels.resize(static_cast<size_t>(rowBytes) * rows);\n    CopyMemory(chunk.pixels.data(), frame.data() + static_cast<size_t>(sourceY) * rowBytes, chunk.pixels.size());\n    bodyChunks.push_back(std::move(chunk));\n'''
+          new = '''    chunk.pixels.resize(static_cast<size_t>(rowBytes) * rows);\n    CopyMemory(chunk.pixels.data(), frame.data() + static_cast<size_t>(sourceY) * rowBytes, chunk.pixels.size());\n    if (overlayTracker) {\n        int sanitizedPixels = overlayTracker->sanitizeChunk(chunk.pixels, sourceY, rows, frame);\n        if (sanitizedPixels > 0) {\n            StarCapDiag::append(std::format(\n                L"[long-next] overlay-sanitize sourceY={} rows={} pixels={}",\n                sourceY, rows, sanitizedPixels));\n        }\n    }\n    bodyChunks.push_back(std::move(chunk));\n'''
+          if '[long-next] overlay-sanitize' not in text:
+              if old not in text:
+                  raise SystemExit('appendBodyRows overlay anchor not found')
+              text = text.replace(old, new, 1)
+
+          if text != original:
+              path.write_text(text, encoding='utf-8')
+              print('Integrated Long Capture Next v2 overlay handling.')
+          else:
+              print('Long Capture Next v2 overlay handling already integrated.')
+          PY
+
+      - name: Commit integrated source
+        shell: bash
+        run: |
+          if git diff --quiet -- Src/Win/CapLong.cpp; then
+            echo "No source changes needed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Src/Win/CapLong.cpp
+          git commit -m "Integrate persistent edge overlay handling"
+          git push origin HEAD:feature/long-capture-next-v2
