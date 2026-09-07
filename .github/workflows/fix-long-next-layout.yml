@@ -1,0 +1,73 @@
+name: Fix Long Capture Next Layout
+
+on:
+  push:
+    branches:
+      - feature/long-capture-next
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply source-level layout type fix
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('Src/Win/CapLong.cpp')
+          text = path.read_text(encoding='utf-8')
+          old = '''    int gap = std::max(2, static_cast<int>(2 * win->dpi));
+    int toolW = tool->w;
+    int toolH = tool->h;
+
+    int rightX = static_cast<int>(r.right) + gap;
+    int leftX = static_cast<int>(r.left) - toolW - gap;
+    int x = 0;
+    if (rightX + toolW <= win->w) x = rightX;
+    else if (leftX >= 0) x = leftX;
+    else x = std::max(0, std::min(win->w - toolW, static_cast<int>(r.right) - toolW - gap));
+
+    int y = static_cast<int>(r.bottom) - toolH;
+    y = std::max(0, std::min(win->h - toolH, y));
+'''
+          new = '''    int gap = std::max(2, static_cast<int>(2 * win->dpi));
+    int toolW = static_cast<int>(tool->w);
+    int toolH = static_cast<int>(tool->h);
+    int winW = static_cast<int>(win->w);
+    int winH = static_cast<int>(win->h);
+
+    int rightX = static_cast<int>(r.right) + gap;
+    int leftX = static_cast<int>(r.left) - toolW - gap;
+    int x = 0;
+    if (rightX + toolW <= winW) x = rightX;
+    else if (leftX >= 0) x = leftX;
+    else x = std::max(0, std::min(winW - toolW, static_cast<int>(r.right) - toolW - gap));
+
+    int y = static_cast<int>(r.bottom) - toolH;
+    y = std::max(0, std::min(winH - toolH, y));
+'''
+          if old not in text:
+              print('Layout block already fixed; nothing to do.')
+          else:
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+              print('Updated CapLong.cpp layout block.')
+
+      - name: Commit fix when needed
+        shell: bash
+        run: |
+          if git diff --quiet -- Src/Win/CapLong.cpp; then
+            echo "No source change needed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Src/Win/CapLong.cpp
+          git commit -m "Fix Long Capture Next layout dimensions"
+          git push origin HEAD:feature/long-capture-next
