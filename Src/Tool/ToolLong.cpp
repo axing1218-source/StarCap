@@ -2,7 +2,6 @@
 #include "../Win/WinCap.h"
 #include "../Win/CapLong.h"
 #include "../Lang.h"
-#include "../Tip.h"
 #include "ToolLong.h"
 
 ToolLong::ToolLong(WinCap* win, CapLong* capLong) : Ling::WinBase(), win(win), capLong(capLong)
@@ -30,12 +29,16 @@ ToolLong::~ToolLong()
 
 void ToolLong::onCreated()
 {
-    tip = std::make_unique<Tip>(this);
     body->setBg(0xFFFFFFFF);
     body->setBorder(1.f, 0xA8A8A8ff);
     body->setAlignItems(Ling::Align::Center);
     body->setFlexDirection(Ling::FlexDirection::Row);
 
+    // Do not create hover tooltips for long capture. The long-capture frame source is a
+    // desktop BitBlt, so any StarCap tooltip/window that overlaps the selected region can
+    // become part of the stitched image. The toolbar already exposes status icons and the
+    // important controls also have keyboard shortcuts (Space / Enter / Esc), so a clean
+    // capture is more important than hover help here.
     for (size_t i = 0; i < btnIds.size(); i++)
     {
         auto btn = body->makeChild<Ling::Button>();
@@ -49,22 +52,15 @@ void ToolLong::onCreated()
             statusBtn = btn;
             btn->setFontFamily(L"Microsoft YaHei");
             btn->setFontSize(13.f);
-            tip->bind(btn, L"长截图状态：等待滚动");
         }
         else if (btnIds[i] == L"auto" || btnIds[i] == L"translate") {
             btn->setFontFamily(L"Microsoft YaHei");
             btn->setFontSize(12.f);
-            if (btnIds[i] == L"auto") {
-                autoBtn = btn;
-                tip->bind(btn, L"自动滚动 / 暂停（Space）");
-            }
-            else tip->bind(btn, L"翻译长截图");
+            if (btnIds[i] == L"auto") autoBtn = btn;
         }
         else {
             btn->setFontFamily(L"icon");
             btn->setFontSize(13.f);
-            if (btnIds[i] == L"ocr") tip->bind(btn, Lang::get(L"cap.ocr"));
-            else tip->bind(btn, Lang::get(std::format(L"tool.{}", btnIds[i])));
         }
 
         btn->onClick.add([this](Ling::Button* btn) { onClick(btn); });
