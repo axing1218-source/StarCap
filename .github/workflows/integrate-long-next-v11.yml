@@ -1,0 +1,36 @@
+name: Integrate Long Capture Next v11
+
+on:
+  push:
+    branches:
+      - feature/long-capture-next-v11
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout StarCap
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Materialize v11 source changes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $patch = 'tools\patch_long_capture_next_v11.py'
+          if (-not (Test-Path $patch)) {
+            Write-Host 'v11 source changes already materialized.'
+            exit 0
+          }
+          python $patch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item $patch -Force
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Src/Win/CapLong.cpp Src/Win/CapLong.h tools/patch_long_capture_next_v11.py
+          git commit -m 'Serialize long capture auto steps and hard pause'
+          git push origin HEAD:feature/long-capture-next-v11
