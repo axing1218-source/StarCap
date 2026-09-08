@@ -87,7 +87,10 @@ void ToolCap::onClick(Ling::Button* btn)
 	else if (btn->id == L"qrcode") win->startQrcode();
 	else if (btn->id == L"pin") win->startPin();
 	else if (btn->id == L"save") win->saveToFile();
-	else if (btn->id == L"clipboard") win->copyToClipboard();
+	else if (btn->id == L"clipboard") {
+		StarCapCaptureTranslate::reset(win);
+		win->copyToClipboard();
+	}
 	else if (btn->id == L"close") win->close();
 }
 

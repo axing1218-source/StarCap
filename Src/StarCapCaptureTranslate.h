@@ -456,6 +456,12 @@ namespace StarCapCaptureTranslate
     inline bool busy{ false }, ready{ false }, showing{ false }, hooksInstalled{ false };
     inline int cachedX{ 0 }, cachedY{ 0 }, cachedW{ 0 }, cachedH{ 0 };
 
+    inline HWND translatedViewHwnd(WinCap* win)
+    {
+        if (owner != win || !ready || !showing || !overlay || !overlay->hwnd) return nullptr;
+        return IsWindowVisible(overlay->hwnd) ? overlay->hwnd : nullptr;
+    }
+
     inline void closeOverlay()
     {
         if (overlay) { overlay->close(); overlay.reset(); }
