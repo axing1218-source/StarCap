@@ -7,7 +7,6 @@ on:
       - main
       - starcap-v0.9.7
       - starcap-source-cleanup
-      - feature/long-capture-next
 
 jobs:
   build:
