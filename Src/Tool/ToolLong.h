@@ -3,7 +3,6 @@
 
 class WinCap;
 class CapLong;
-class Tip;
 
 class ToolLong : public Ling::WinBase
 {
@@ -29,5 +28,4 @@ private:
     std::vector<std::wstring> btnCodes = { L"○",L"▶",L"\ue67b",L"译",L"\ue6a2",L"\ue62d",L"\ue608",L"\ue6ad" };
     Ling::Button* statusBtn{ nullptr };
     Ling::Button* autoBtn{ nullptr };
-    std::unique_ptr<Tip> tip;
 };
