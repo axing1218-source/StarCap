@@ -272,6 +272,34 @@ D2D1_RECT_F CutMask::detectUiElementRect(HWND hwnd, POINT localPos, const D2D1_R
 		return validRect(out) && area >= 24.f;
 	};
 
+	auto isQtWindow = [](HWND h) {
+		if (!h) return false;
+		wchar_t cls[128]{};
+		int n = GetClassNameW(h, cls, static_cast<int>(std::size(cls)));
+		if (n <= 0) return false;
+		return wcsncmp(cls, L"Qt", 2) == 0 || wcsstr(cls, L"QWindow") != nullptr;
+	};
+
+	if (isQtWindow(probeHwnd) || isQtWindow(hwnd)) {
+		ComPtr<IAccessible> pointAcc;
+		VARIANT child{};
+		VariantInit(&child);
+		HRESULT hr = AccessibleObjectFromPoint(screenPos, pointAcc.GetAddressOf(), &child);
+		if (SUCCEEDED(hr) && pointAcc) {
+			long l{}, t{}, w{}, h{};
+			if (SUCCEEDED(pointAcc->accLocation(&l, &t, &w, &h, child)) && w >= 3 && h >= 3) {
+				RECT rr{ l, t, l + w, t + h };
+				D2D1_RECT_F local{};
+				if (clippedCandidate(rr, fallback, local) && rectArea(local) < rectArea(fallback) * .995f) {
+					VariantClear(&child);
+					return local;
+				}
+			}
+		}
+		VariantClear(&child);
+		return detectNativeChildRect(hwnd, localPos, fallback);
+	}
+
 	auto semanticWeight = [](CONTROLTYPEID type) {
 		switch (type) {
 		case UIA_TextControlTypeId:
