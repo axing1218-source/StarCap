@@ -861,8 +861,9 @@ void CutMask::hideMagnifierPopup()
 void CutMask::updateMagnifierPopup(POINT live)
 {
     auto* cap = static_cast<WinCap*>(win);
+    const bool activeAdjustDrag = cap && cap->isPress && adjustHit != MaskHit::None;
     if (!cap || hideLabel || cap->stage != WinCap::CapStage::Adjust ||
-        !hasRect() || !pointInRect(maskRect, live)) {
+        !hasRect() || (!pointInRect(maskRect, live) && !activeAdjustDrag)) {
         hideMagnifierPopup();
         return;
     }
@@ -929,7 +930,8 @@ void CutMask::paintMagnifier(ID2D1DeviceContext* ctx)
         hideMagnifierPopup();
         return;
     }
-    if (hasRect() && !pointInRect(maskRect, live)) {
+    const bool activeAdjustDrag = cap->isPress && adjustHit != MaskHit::None;
+    if (hasRect() && !pointInRect(maskRect, live) && !activeAdjustDrag) {
         hideMagnifierPopup();
         return;
     }

@@ -156,48 +156,122 @@ namespace {
         return features;
     }
 
+    std::vector<float> makeMotionWeights(const std::vector<float>& oldFeatures,
+        const std::vector<float>& newFeatures, int height)
+    {
+        const int dims = featureBins * 2;
+        std::vector<float> weights(static_cast<size_t>(height) * featureBins, 0.0f);
+        if (oldFeatures.size() != newFeatures.size() ||
+            oldFeatures.size() < static_cast<size_t>(height) * dims) return weights;
+
+        std::vector<float> raw(weights.size(), 0.0f);
+        for (int y = 0; y < height; ++y) {
+            for (int bin = 0; bin < featureBins; ++bin) {
+                size_t base = static_cast<size_t>(y) * dims + bin * 2;
+                double grayDelta = std::abs(static_cast<double>(oldFeatures[base]) - newFeatures[base]);
+                double edgeDelta = std::abs(static_cast<double>(oldFeatures[base + 1]) - newFeatures[base + 1]);
+                double signal = grayDelta * 0.75 + edgeDelta * 1.45;
+                raw[static_cast<size_t>(y) * featureBins + bin] =
+                    static_cast<float>(std::clamp((signal - 1.25) / 13.0, 0.0, 1.0));
+            }
+        }
+
+        // Dilate a little so text/bubble edges carry their nearby pixels with them,
+        // but do not let a large stationary wallpaper take over the score again.
+        for (int y = 0; y < height; ++y) {
+            for (int bin = 0; bin < featureBins; ++bin) {
+                float best = 0.0f;
+                for (int dy = -1; dy <= 1; ++dy) {
+                    int yy = y + dy;
+                    if (yy < 0 || yy >= height) continue;
+                    for (int db = -1; db <= 1; ++db) {
+                        int bb = bin + db;
+                        if (bb < 0 || bb >= featureBins) continue;
+                        best = std::max(best, raw[static_cast<size_t>(yy) * featureBins + bb]);
+                    }
+                }
+                weights[static_cast<size_t>(y) * featureBins + bin] = best;
+            }
+        }
+        return weights;
+    }
+
+    double motionCoverage(const std::vector<float>& weights, int height, int bodyTop, int bodyBottom)
+    {
+        if (weights.size() < static_cast<size_t>(height) * featureBins || bodyBottom <= bodyTop) return 0.0;
+        size_t moving = 0;
+        size_t total = 0;
+        for (int y = bodyTop; y < bodyBottom; y += 3) {
+            for (int bin = 0; bin < featureBins; ++bin) {
+                if (weights[static_cast<size_t>(y) * featureBins + bin] >= 0.18f) ++moving;
+                ++total;
+            }
+        }
+        return total ? static_cast<double>(moving) / total : 0.0;
+    }
+
     double featureScore(const std::vector<float>& oldFeatures, const std::vector<float>& newFeatures,
-        int height, int offset, int bodyTop, int bodyBottom)
+        const std::vector<float>& motionWeights, int height, int offset, int bodyTop, int bodyBottom)
     {
         const int dims = featureBins * 2;
         int end = bodyBottom - offset;
         if (end <= bodyTop) return 1.0;
+        const bool motionAware = motionWeights.size() >= static_cast<size_t>(height) * featureBins;
         double sum = 0.0;
-        size_t count = 0;
+        double weightSum = 0.0;
         for (int y = bodyTop; y < end; y += 3) {
             const float* a = oldFeatures.data() + static_cast<size_t>(y + offset) * dims;
             const float* b = newFeatures.data() + static_cast<size_t>(y) * dims;
-            for (int d = 0; d < dims; ++d) {
-                double weight = (d & 1) ? 1.35 : 1.0;
-                sum += std::abs(static_cast<double>(a[d]) - static_cast<double>(b[d])) * weight;
-                count += static_cast<size_t>(weight > 1.0 ? 1 : 1);
+            for (int bin = 0; bin < featureBins; ++bin) {
+                double cellWeight = 1.0;
+                if (motionAware) {
+                    float w0 = motionWeights[static_cast<size_t>(y) * featureBins + bin];
+                    float w1 = motionWeights[static_cast<size_t>(std::min(height - 1, y + offset)) * featureBins + bin];
+                    // Keep a small floor so extremely sparse chats still retain global context.
+                    cellWeight = 0.07 + 0.93 * std::max(w0, w1);
+                }
+                for (int channel = 0; channel < 2; ++channel) {
+                    int d = bin * 2 + channel;
+                    double semanticWeight = channel ? 1.35 : 1.0;
+                    double w = cellWeight * semanticWeight;
+                    sum += std::abs(static_cast<double>(a[d]) - static_cast<double>(b[d])) * w;
+                    weightSum += w;
+                }
             }
         }
-        if (count == 0) return 1.0;
-        return sum / (static_cast<double>(count) * 255.0);
+        if (weightSum <= 0.0) return 1.0;
+        return sum / (weightSum * 255.0);
     }
 
     double pixelMadAtOffset(const std::vector<BYTE>& oldFrame, const std::vector<BYTE>& newFrame,
-        int width, int height, int offset, int bodyTop, int bodyBottom)
+        const std::vector<float>& motionWeights, int width, int height, int offset, int bodyTop, int bodyBottom)
     {
         int margin = std::max(8, width / 20);
         int end = bodyBottom - offset;
         if (end <= bodyTop) return 255.0;
+        const bool motionAware = motionWeights.size() >= static_cast<size_t>(height) * featureBins;
         double sum = 0.0;
-        size_t count = 0;
+        double weightSum = 0.0;
         int xStep = std::max(5, width / 100);
         for (int y = bodyTop; y < end; y += 7) {
             int oldY = y + offset;
             for (int x = margin; x < width - margin; x += xStep) {
+                double w = 1.0;
+                if (motionAware) {
+                    int bin = std::clamp(x * featureBins / std::max(1, width), 0, featureBins - 1);
+                    float w0 = motionWeights[static_cast<size_t>(y) * featureBins + bin];
+                    float w1 = motionWeights[static_cast<size_t>(std::min(height - 1, oldY)) * featureBins + bin];
+                    w = 0.07 + 0.93 * std::max(w0, w1);
+                }
                 size_t ia = (static_cast<size_t>(oldY) * width + x) * 4;
                 size_t ib = (static_cast<size_t>(y) * width + x) * 4;
-                sum += std::abs(static_cast<int>(oldFrame[ia]) - static_cast<int>(newFrame[ib]));
-                sum += std::abs(static_cast<int>(oldFrame[ia + 1]) - static_cast<int>(newFrame[ib + 1]));
-                sum += std::abs(static_cast<int>(oldFrame[ia + 2]) - static_cast<int>(newFrame[ib + 2]));
-                count += 3;
+                sum += std::abs(static_cast<int>(oldFrame[ia]) - static_cast<int>(newFrame[ib])) * w;
+                sum += std::abs(static_cast<int>(oldFrame[ia + 1]) - static_cast<int>(newFrame[ib + 1])) * w;
+                sum += std::abs(static_cast<int>(oldFrame[ia + 2]) - static_cast<int>(newFrame[ib + 2])) * w;
+                weightSum += 3.0 * w;
             }
         }
-        return count > 0 ? sum / count : 255.0;
+        return weightSum > 0.0 ? sum / weightSum : 255.0;
     }
 
     LRESULT CALLBACK longCaptureKeyboardProc(int code, WPARAM wParam, LPARAM lParam)
@@ -427,7 +501,7 @@ CapLong::MatchResult CapLong::matchFrame(const std::vector<BYTE>& oldFrame, cons
     if (oldFrame.size() != newFrame.size() || imgW <= 0 || imgH <= 0) return result;
 
     double sameRatio = sampledSameRatio(oldFrame, newFrame, imgW, imgH);
-    if (sameRatio >= 0.988) {
+    if (sameRatio >= 0.996) {
         result.duplicate = true;
         result.visualScore = 0.0;
         result.pixelMad = 0.0;
@@ -458,6 +532,11 @@ CapLong::MatchResult CapLong::matchFrame(const std::vector<BYTE>& oldFrame, cons
 
     auto oldFeatures = makeRowFeatures(oldFrame, imgW, imgH);
     auto newFeatures = makeRowFeatures(newFrame, imgW, imgH);
+    auto motionWeights = makeMotionWeights(oldFeatures, newFeatures, imgH);
+    double movingCoverage = motionCoverage(motionWeights, imgH, bodyTop, bodyBottom);
+    const bool motionAware = movingCoverage >= 0.030;
+    const std::vector<float> noMotionWeights;
+    const auto& scoreWeights = motionAware ? motionWeights : noMotionWeights;
 
     struct Candidate {
         int offset;
@@ -469,7 +548,7 @@ CapLong::MatchResult CapLong::matchFrame(const std::vector<BYTE>& oldFrame, cons
     int minOverlap = std::max(90, bodySize * 24 / 100);
     int maxOffset = std::max(1, bodySize - minOverlap);
     for (int offset = 1; offset <= maxOffset; ++offset) {
-        double raw = featureScore(oldFeatures, newFeatures, imgH, offset, bodyTop, bodyBottom);
+        double raw = featureScore(oldFeatures, newFeatures, scoreWeights, imgH, offset, bodyTop, bodyBottom);
         double adjusted = raw;
         if (structuredExpectedOffset >= 4.0) {
             double distance = std::abs(offset - structuredExpectedOffset);
@@ -496,7 +575,7 @@ CapLong::MatchResult CapLong::matchFrame(const std::vector<BYTE>& oldFrame, cons
     result.offset = best.offset;
     result.visualScore = best.raw;
     result.secondScore = second.raw;
-    result.pixelMad = pixelMadAtOffset(oldFrame, newFrame, imgW, imgH, best.offset, bodyTop, bodyBottom);
+    result.pixelMad = pixelMadAtOffset(oldFrame, newFrame, scoreWeights, imgW, imgH, best.offset, bodyTop, bodyBottom);
 
     double adjustedMargin = second.adjusted - best.adjusted;
     bool nearExact = best.raw <= 0.018 && result.pixelMad <= 7.0;
@@ -513,9 +592,9 @@ CapLong::MatchResult CapLong::matchFrame(const std::vector<BYTE>& oldFrame, cons
     result.usedStructuredPrior = structured;
 
     StarCapDiag::append(std::format(
-        L"[long-next] match best={} raw={:.5f} adj={:.5f} second={} raw2={:.5f} adj2={:.5f} margin={:.5f} mad={:.2f} expected={:.1f} same={:.4f} body=[{},{}] static={}+{} accept={} mode={}",
+        L"[long-next] match best={} raw={:.5f} adj={:.5f} second={} raw2={:.5f} adj2={:.5f} margin={:.5f} mad={:.2f} expected={:.1f} same={:.4f} motion={:.4f}/{} body=[{},{}] static={}+{} accept={} mode={}",
         best.offset, best.raw, best.adjusted, second.offset, second.raw, second.adjusted,
-        adjustedMargin, result.pixelMad, structuredExpectedOffset, sameRatio,
+        adjustedMargin, result.pixelMad, structuredExpectedOffset, sameRatio, movingCoverage, motionAware ? 1 : 0,
         bodyTop, bodyBottom, top, bottom, result.accepted ? 1 : 0,
         nearExact ? L"exact" : (structured ? L"structured" : (robust ? L"robust" : L"reject"))));
 
@@ -567,11 +646,68 @@ void CapLong::appendBodyRows(const std::vector<BYTE>& frame, int sourceY, int ro
     ImageChunk chunk;
     chunk.height = rows;
     chunk.pixels.resize(static_cast<size_t>(rowBytes) * rows);
-    CopyMemory(chunk.pixels.data(), frame.data() + static_cast<size_t>(sourceY) * rowBytes, chunk.pixels.size());
+
+    const int bodyTop = staticTop;
+    const int bodyBottom = imgH - staticBottom;
+    const int bodyRows = std::max(1, bodyBottom - bodyTop);
+    const double stationarySceneRatio = committedFrame.size() == frame.size()
+        ? sampledSameRatio(committedFrame, frame, imgW, imgH) : 0.0;
+    const bool layeredScene = stationarySceneRatio >= 0.55 && stationarySceneRatio < 0.996;
+    const int blockW = std::max(8, imgW / 48);
+    int stabilizedBlocks = 0;
+    int consideredBlocks = 0;
+
+    auto blockStationary = [&](int y, int x0, int x1) {
+        if (!layeredScene || committedFrame.size() != frame.size() || y < 0 || y >= imgH) return false;
+        int same = 0;
+        int total = 0;
+        int step = std::max(2, (x1 - x0) / 5);
+        for (int yy = std::max(bodyTop, y - 1); yy <= std::min(bodyBottom - 1, y + 1); ++yy) {
+            for (int x = x0; x < x1; x += step) {
+                size_t i = (static_cast<size_t>(yy) * imgW + x) * 4;
+                int d = std::abs(static_cast<int>(committedFrame[i]) - static_cast<int>(frame[i]))
+                    + std::abs(static_cast<int>(committedFrame[i + 1]) - static_cast<int>(frame[i + 1]))
+                    + std::abs(static_cast<int>(committedFrame[i + 2]) - static_cast<int>(frame[i + 2]));
+                if (d <= 9) ++same;
+                ++total;
+            }
+        }
+        return total >= 6 && same * 100 >= total * 94;
+    };
+
+    for (int r = 0; r < rows; ++r) {
+        const int sy = sourceY + r;
+        BYTE* dstRow = chunk.pixels.data() + static_cast<size_t>(r) * rowBytes;
+        const BYTE* srcRow = frame.data() + static_cast<size_t>(sy) * rowBytes;
+        if (!layeredScene) {
+            CopyMemory(dstRow, srcRow, rowBytes);
+            continue;
+        }
+
+        const int phaseY = bodyTop + ((bodyHeight + r) % bodyRows);
+        const BYTE* phaseRow = frame.data() + static_cast<size_t>(phaseY) * rowBytes;
+        for (int x0 = 0; x0 < imgW; x0 += blockW) {
+            int x1 = std::min(imgW, x0 + blockW);
+            ++consideredBlocks;
+            const bool sourceStatic = blockStationary(sy, x0, x1);
+            const bool phaseStatic = blockStationary(phaseY, x0, x1);
+            const BYTE* chosen = (sourceStatic && phaseStatic) ? phaseRow : srcRow;
+            if (sourceStatic && phaseStatic) ++stabilizedBlocks;
+            CopyMemory(dstRow + static_cast<size_t>(x0) * 4,
+                chosen + static_cast<size_t>(x0) * 4,
+                static_cast<size_t>(x1 - x0) * 4);
+        }
+    }
+
     bodyChunks.push_back(std::move(chunk));
     bodyHeight += rows;
     resultH = staticTop + bodyHeight + staticBottom;
     invalidateMaterialized();
+    if (layeredScene) {
+        StarCapDiag::append(std::format(
+            L"[long-next] layer-append same={:.4f} rows={} stabilized={}/{} bodyHeight={}",
+            stationarySceneRatio, rows, stabilizedBlocks, consideredBlocks, bodyHeight));
+    }
 }
 
 void CapLong::updateFooter(const std::vector<BYTE>& frame)
