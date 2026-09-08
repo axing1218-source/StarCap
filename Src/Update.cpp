@@ -28,6 +28,9 @@ namespace {
     constexpr std::wstring_view exeUrl{ L"https://github.com/axing1218-source/StarCap/releases/latest/download/StarCap.exe" };
     constexpr std::wstring_view releaseUrl{ L"https://github.com/axing1218-source/StarCap/releases/latest" };
     constexpr std::wstring_view newExeName{ L"StarCap.update.exe" };
+    constexpr UINT initialCheckDelayMs{ 15000 };
+    constexpr UINT busyRetryDelayMs{ 60000 };
+    constexpr UINT failureRetryDelayMs{ 30 * 60 * 1000 };
 
     bool checked{ false };
     UINT_PTR checkTimer{ 0 };
@@ -152,6 +155,27 @@ namespace {
     }
 
     void promptLater();
+    void scheduleCheck(UINT delayMs);
+    winrt::fire_and_forget doCheck();
+
+    void markCheckedToday()
+    {
+        checked = true;
+        if (checkTimer) {
+            KillTimer(nullptr, checkTimer);
+            checkTimer = 0;
+        }
+        Setting::get()->setUpdateCheckDay(today());
+    }
+
+    void scheduleRetryFromWorker(UINT delayMs = failureRetryDelayMs)
+    {
+        auto app = Ling::App::get();
+        if (!app) return;
+        app->dq.TryEnqueue([delayMs]() {
+            if (!checked && !checkTimer) scheduleCheck(delayMs);
+        });
+    }
 
     void CALLBACK onPromptTimer(HWND, UINT, UINT_PTR id, DWORD)
     {
@@ -171,45 +195,90 @@ namespace {
         promptTimer = SetTimer(nullptr, 0, 5000, onPromptTimer);
     }
 
+    void CALLBACK onCheckTimer(HWND, UINT, UINT_PTR id, DWORD)
+    {
+        KillTimer(nullptr, id);
+        if (checkTimer == id) checkTimer = 0;
+        if (checked) return;
+        if (!isIdle()) {
+            scheduleCheck(busyRetryDelayMs);
+            return;
+        }
+        doCheck();
+    }
+
+    void scheduleCheck(UINT delayMs)
+    {
+        if (checked || checkTimer) return;
+        checkTimer = SetTimer(nullptr, 0, delayMs, onCheckTimer);
+    }
+
     winrt::fire_and_forget doCheck()
     {
         co_await winrt::resume_background();
         try {
             auto exePath = selfPath();
-            if (exePath.empty()) co_return;
+            if (exePath.empty()) {
+                scheduleRetryFromWorker();
+                co_return;
+            }
 
             HttpBaseProtocolFilter filter;
             filter.CacheControl().ReadBehavior(HttpCacheReadBehavior::MostRecent);
             filter.CacheControl().WriteBehavior(HttpCacheWriteBehavior::NoCache);
             HttpClient client{ filter };
 
-            auto op = client.GetStringAsync(Uri{ versionUrl });
-            auto guard = ThreadPoolTimer::CreateTimer([op](const ThreadPoolTimer&) { op.Cancel(); },
+            auto versionOp = client.GetStringAsync(Uri{ versionUrl });
+            auto versionGuard = ThreadPoolTimer::CreateTimer([versionOp](const ThreadPoolTimer&) { versionOp.Cancel(); },
                 std::chrono::seconds(10));
-            std::wstring body{ co_await op };
-            guard.Cancel();
+            std::wstring body{ co_await versionOp };
+            versionGuard.Cancel();
 
             JsonObject obj{ nullptr };
-            if (!JsonObject::TryParse(body, obj)) co_return;
+            if (!JsonObject::TryParse(body, obj)) {
+                scheduleRetryFromWorker();
+                co_return;
+            }
             auto arr = obj.GetNamedArray(L"version", nullptr);
-            if (!arr || arr.Size() < 3) co_return;
+            if (!arr || arr.Size() < 3) {
+                scheduleRetryFromWorker();
+                co_return;
+            }
 
             std::array<int, 3> remote{ 0, 0, 0 };
             for (uint32_t i = 0; i < 3; i++) {
                 remote[i] = static_cast<int>(arr.GetNumberAt(i));
             }
-            if (remote <= Ling::Util::getVerNum()) co_return;
-
-            auto verStr = std::format(L"{}.{}.{}", remote[0], remote[1], remote[2]);
-            if (!canWrite(exePath.parent_path())) {
-                Ling::App::get()->dq.TryEnqueue([verStr]() { promptNoPermission(verStr); });
+            if (remote <= Ling::Util::getVerNum()) {
+                if (auto app = Ling::App::get()) {
+                    app->dq.TryEnqueue([]() { markCheckedToday(); });
+                }
                 co_return;
             }
 
-            auto buffer = co_await client.GetBufferAsync(Uri{ exeUrl });
+            auto verStr = std::format(L"{}.{}.{}", remote[0], remote[1], remote[2]);
+            if (!canWrite(exePath.parent_path())) {
+                if (auto app = Ling::App::get()) {
+                    app->dq.TryEnqueue([verStr]() {
+                        markCheckedToday();
+                        promptNoPermission(verStr);
+                    });
+                }
+                co_return;
+            }
+
+            auto exeOp = client.GetBufferAsync(Uri{ exeUrl });
+            auto exeGuard = ThreadPoolTimer::CreateTimer([exeOp](const ThreadPoolTimer&) { exeOp.Cancel(); },
+                std::chrono::seconds(60));
+            auto buffer = co_await exeOp;
+            exeGuard.Cancel();
+
             std::vector<BYTE> bytes(buffer.Length());
             DataReader::FromBuffer(buffer).ReadBytes(bytes);
-            if (bytes.size() < 2 || bytes[0] != 'M' || bytes[1] != 'Z') co_return;
+            if (bytes.size() < 2 || bytes[0] != 'M' || bytes[1] != 'Z') {
+                scheduleRetryFromWorker();
+                co_return;
+            }
 
             auto dataPath = Setting::get()->getDataPath();
             std::error_code ec;
@@ -217,37 +286,41 @@ namespace {
             auto target = dataPath / newExeName;
             {
                 std::ofstream file{ target, std::ios::binary | std::ios::trunc };
-                if (!file) co_return;
+                if (!file) {
+                    scheduleRetryFromWorker();
+                    co_return;
+                }
                 file.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                if (!file.good()) {
+                    file.close();
+                    std::filesystem::remove(target, ec);
+                    scheduleRetryFromWorker();
+                    co_return;
+                }
             }
 
             // Never replace the running executable unless the downloaded file's
             // embedded version exactly matches the release metadata.
             if (Ling::Util::getVerNum(target.wstring()) != remote) {
                 std::filesystem::remove(target, ec);
+                scheduleRetryFromWorker();
                 co_return;
             }
 
-            Ling::App::get()->dq.TryEnqueue([target, verStr]() {
-                newExePath = target;
-                newVer = verStr;
-                promptLater();
-            });
+            if (auto app = Ling::App::get()) {
+                app->dq.TryEnqueue([target, verStr]() {
+                    markCheckedToday();
+                    newExePath = target;
+                    newVer = verStr;
+                    promptLater();
+                });
+            }
         }
         catch (...) {
-            // Update checks are best-effort. Missing releases, network errors,
-            // timeouts, redirects or invalid assets stay silent and retry later.
+            // Update checks are best-effort. Network errors, timeouts or invalid
+            // assets stay silent and are retried later in the same session.
+            scheduleRetryFromWorker();
         }
-    }
-
-    void CALLBACK onCheckTimer(HWND, UINT, UINT_PTR id, DWORD)
-    {
-        KillTimer(nullptr, id);
-        if (checkTimer == id) checkTimer = 0;
-        if (!isIdle()) return;
-        checked = true;
-        Setting::get()->setUpdateCheckDay(today());
-        doCheck();
     }
 }
 
@@ -262,5 +335,5 @@ void Update::checkLater()
     if (!lingApp) return;
     if (lingApp->args[L"--auto-quit"] == L"true") return;
     if (Setting::get()->getUpdateCheckDay() >= today()) return;
-    checkTimer = SetTimer(nullptr, 0, 15000, onCheckTimer);
+    scheduleCheck(initialCheckDelayMs);
 }
