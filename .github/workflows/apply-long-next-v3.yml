@@ -31,27 +31,17 @@ jobs:
               path.write_text(text, encoding='utf-8')
           elif 'toolbar-placement=' not in text:
               raise SystemExit('layoutTool anchor not found')
-
-          wf = Path('.github/workflows/starcap-direct-build.yml')
-          w = wf.read_text(encoding='utf-8')
-          needle = '      - feature/long-capture-next\n'
-          add = needle + '      - feature/long-capture-next-v3\n'
-          if '      - feature/long-capture-next-v3\n' not in w:
-              if needle not in w:
-                  raise SystemExit('direct-build branch anchor not found')
-              w = w.replace(needle, add, 1)
-              wf.write_text(w, encoding='utf-8')
           PY
 
       - name: Commit integrated source
         shell: bash
         run: |
-          if git diff --quiet -- Src/Win/CapLong.cpp .github/workflows/starcap-direct-build.yml; then
+          if git diff --quiet -- Src/Win/CapLong.cpp; then
             echo "No source changes needed."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Src/Win/CapLong.cpp .github/workflows/starcap-direct-build.yml
+          git add Src/Win/CapLong.cpp
           git commit -m "Prefer toolbar placement outside long capture region"
           git push origin HEAD:feature/long-capture-next-v3
