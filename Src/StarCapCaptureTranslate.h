@@ -9,6 +9,7 @@
 #include "Win/WinCap.h"
 #include "Win/CutMask.h"
 #include "Setting.h"
+#include "Util.h"
 #include "GeminiClient.h"
 #include "StarCapTextGeometry.h"
 #include "StarCapParagraphLayout.h"
@@ -107,6 +108,10 @@ namespace StarCapCaptureTranslate
             x = screenX; y = screenY; w = (float)imageW; h = (float)imageH;
             disableWinAnimation();
             onKeyDown.add([this](UINT key) {
+                if (key == VK_RETURN) {
+                    copyTranslatedToClipboardAndClose();
+                    return;
+                }
                 if (key != VK_ESCAPE) return;
                 auto* target = this->captureOwner;
                 hide();
@@ -173,6 +178,74 @@ namespace StarCapCaptureTranslate
         LRESULT onHitTest(const POINT) override { return HTTRANSPARENT; }
 
     private:
+        bool renderTranslatedPixels(std::vector<BYTE>& out)
+        {
+            out.clear();
+            if (imageW <= 0 || imageH <= 0) return false;
+
+            Microsoft::WRL::ComPtr<ID2D1Device> device;
+            Ling::D2D::get()->deviceContext->GetDevice(device.GetAddressOf());
+            if (!device) return false;
+
+            Microsoft::WRL::ComPtr<ID2D1DeviceContext> offscreen;
+            if (FAILED(device->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
+                offscreen.GetAddressOf())) || !offscreen) return false;
+
+            D2D1_BITMAP_PROPERTIES1 targetProps{};
+            targetProps.pixelFormat = D2D1::PixelFormat(
+                DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED);
+            targetProps.dpiX = 96.f;
+            targetProps.dpiY = 96.f;
+            targetProps.bitmapOptions = D2D1_BITMAP_OPTIONS_TARGET;
+
+            Microsoft::WRL::ComPtr<ID2D1Bitmap1> target;
+            if (FAILED(offscreen->CreateBitmap(D2D1::SizeU((UINT32)imageW, (UINT32)imageH),
+                nullptr, 0, &targetProps, target.GetAddressOf())) || !target) return false;
+
+            offscreen->SetTarget(target.Get());
+            offscreen->BeginDraw();
+            constexpr float c = 254.f / 255.f;
+            offscreen->Clear(D2D1::ColorF(c, c, c, 1.f));
+            paintBlocks(offscreen.Get(), D2D1::RectF(0.f, 0.f, (float)imageW, (float)imageH));
+            if (FAILED(offscreen->EndDraw())) return false;
+
+            D2D1_BITMAP_PROPERTIES1 cpuProps{};
+            cpuProps.pixelFormat = targetProps.pixelFormat;
+            cpuProps.dpiX = 96.f;
+            cpuProps.dpiY = 96.f;
+            cpuProps.bitmapOptions = D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW;
+
+            Microsoft::WRL::ComPtr<ID2D1Bitmap1> cpu;
+            if (FAILED(offscreen->CreateBitmap(D2D1::SizeU((UINT32)imageW, (UINT32)imageH),
+                nullptr, 0, &cpuProps, cpu.GetAddressOf())) || !cpu) return false;
+            if (FAILED(cpu->CopyFromBitmap(nullptr, target.Get(), nullptr))) return false;
+
+            D2D1_MAPPED_RECT mapped{};
+            if (FAILED(cpu->Map(D2D1_MAP_OPTIONS_READ, &mapped))) return false;
+            const size_t rowBytes = (size_t)imageW * 4;
+            out.resize(rowBytes * (size_t)imageH);
+            for (int row = 0; row < imageH; ++row) {
+                BYTE* dst = out.data() + (size_t)row * rowBytes;
+                memcpy(dst, mapped.bits + (size_t)row * mapped.pitch, rowBytes);
+                for (size_t i = 3; i < rowBytes; i += 4) dst[i] = 255;
+            }
+            cpu->Unmap();
+            return true;
+        }
+
+        void copyTranslatedToClipboardAndClose()
+        {
+            std::vector<BYTE> rendered;
+            if (!renderTranslatedPixels(rendered) || rendered.empty()) return;
+            Util::saveToClipboard(imageW, imageH, rendered.data());
+
+            auto* target = captureOwner;
+            hide();
+            Ling::App::get()->dq.TryEnqueue([target]() {
+                if (target && WinCap::get() == target) target->close();
+            });
+        }
+
         D2D1_COLOR_F sampleBackground(const GeminiClient::TranslationBlock& block) const
         {
             if (pixels.empty()) return D2D1::ColorF(D2D1::ColorF::White);
@@ -383,6 +456,12 @@ namespace StarCapCaptureTranslate
     inline bool busy{ false }, ready{ false }, showing{ false }, hooksInstalled{ false };
     inline int cachedX{ 0 }, cachedY{ 0 }, cachedW{ 0 }, cachedH{ 0 };
 
+    inline HWND translatedViewHwnd(WinCap* win)
+    {
+        if (owner != win || !ready || !showing || !overlay || !overlay->hwnd) return nullptr;
+        return IsWindowVisible(overlay->hwnd) ? overlay->hwnd : nullptr;
+    }
+
     inline void closeOverlay()
     {
         if (overlay) { overlay->close(); overlay.reset(); }
@@ -452,8 +531,22 @@ namespace StarCapCaptureTranslate
             ++requestId; closeOverlay(); ready = false; busy = false;
         }
         if (ready && overlay) {
-            if (showing) { overlay->hide(); showing = false; }
-            else { overlay->show(); showing = true; }
+            if (showing) {
+                overlay->hide();
+                showing = false;
+                if (win->hwnd) {
+                    SetForegroundWindow(win->hwnd);
+                    SetFocus(win->hwnd);
+                }
+            }
+            else {
+                overlay->show();
+                showing = true;
+                if (overlay->hwnd) {
+                    SetForegroundWindow(overlay->hwnd);
+                    SetFocus(overlay->hwnd);
+                }
+            }
             return;
         }
         if (busy) return;

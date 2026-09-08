@@ -87,7 +87,17 @@ void ToolCap::onClick(Ling::Button* btn)
 	else if (btn->id == L"qrcode") win->startQrcode();
 	else if (btn->id == L"pin") win->startPin();
 	else if (btn->id == L"save") win->saveToFile();
-	else if (btn->id == L"clipboard") win->copyToClipboard();
+	else if (btn->id == L"clipboard") {
+		// The checkmark/clipboard button follows the same current-view rule as Enter:
+		// translated view -> translated image, source view -> original screenshot.
+		HWND translated = StarCapCaptureTranslate::translatedViewHwnd(win);
+		if (translated && IsWindow(translated)) {
+			PostMessageW(translated, WM_KEYDOWN, VK_RETURN, 0);
+		}
+		else {
+			win->copyToClipboard();
+		}
+	}
 	else if (btn->id == L"close") win->close();
 }
 

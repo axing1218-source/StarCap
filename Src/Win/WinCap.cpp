@@ -10,6 +10,7 @@
 #include "CapLong.h"
 #include "CapVideo.h"
 #include "../Tool/ToolCap.h"
+#include "../StarCapCaptureTranslate.h"
 using namespace Microsoft::WRL;
 
 namespace
@@ -21,6 +22,8 @@ namespace
     HHOOK gCaptureEscapeHook = nullptr;
     HWND gCaptureEscapeWindow = nullptr;
     bool gCaptureEscapeDown = false;
+    bool gCaptureTabDown = false;
+    bool gCaptureEnterDown = false;
 
     LRESULT CALLBACK captureEscapeProc(int code, WPARAM wParam, LPARAM lParam)
     {
@@ -37,6 +40,46 @@ namespace
                 if (up) gCaptureEscapeDown = false;
                 return 1;
             }
+            // Tab is the window/element detection toggle. Unlike mouse input, the
+            // ordinary WM_KEYDOWN path depends on keyboard focus; after a long
+            // capture Windows can leave focus on the application underneath even
+            // though the next StarCap capture overlay is visible and topmost.
+            // Relay plain Tab through the same low-level capture hook as Esc so the
+            // shortcut remains deterministic regardless of foreground focus.
+            if (kb->vkCode == VK_TAB) {
+                const bool modified = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0
+                    || (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+                if (!modified) {
+                    if (down && !gCaptureTabDown) {
+                        gCaptureTabDown = true;
+                        if (IsWindow(gCaptureEscapeWindow))
+                            PostMessageW(gCaptureEscapeWindow, WM_KEYDOWN, VK_TAB, 0);
+                    }
+                    if (up) gCaptureTabDown = false;
+                    return 1;
+                }
+                if (up) gCaptureTabDown = false;
+            }
+            // Enter is the primary confirm shortcut. Route it through the low-level
+            // hook as well, so confirmation never depends on which top-level window
+            // currently owns keyboard focus. If the translated overlay is the current
+            // visible view, send Enter there; otherwise send it to WinCap.
+            if (kb->vkCode == VK_RETURN) {
+                const bool modified = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0
+                    || (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+                if (!modified) {
+                    if (down && !gCaptureEnterDown) {
+                        gCaptureEnterDown = true;
+                        HWND target = StarCapCaptureTranslate::translatedViewHwnd(WinCap::get());
+                        if (!target) target = gCaptureEscapeWindow;
+                        if (IsWindow(target))
+                            PostMessageW(target, WM_KEYDOWN, VK_RETURN, 0);
+                    }
+                    if (up) gCaptureEnterDown = false;
+                    return 1;
+                }
+                if (up) gCaptureEnterDown = false;
+            }
         }
         return CallNextHookEx(gCaptureEscapeHook, code, wParam, lParam);
     }
@@ -45,6 +88,8 @@ namespace
     {
         gCaptureEscapeWindow = hwnd;
         gCaptureEscapeDown = false;
+        gCaptureTabDown = false;
+        gCaptureEnterDown = false;
         if (!gCaptureEscapeHook)
             gCaptureEscapeHook = SetWindowsHookExW(WH_KEYBOARD_LL, captureEscapeProc, GetModuleHandleW(nullptr), 0);
     }
@@ -57,6 +102,8 @@ namespace
         }
         gCaptureEscapeWindow = nullptr;
         gCaptureEscapeDown = false;
+        gCaptureTabDown = false;
+        gCaptureEnterDown = false;
     }
 }
 
@@ -365,8 +412,11 @@ void WinCap::onKey(UINT key)
 
 void WinCap::copyCurrentStage()
 {
-    if (stage == CapStage::Adjust) {
-        // 选区里的像素，与在窗口里双击同一条路（见 onDown）。它自己会关窗
+    if ((stage == CapStage::Select || stage == CapStage::Adjust)
+        && cutMask && cutMask->hasRect()) {
+        // Select may already contain a valid auto-detected window/element rectangle.
+        // Enter confirms that highlighted rectangle immediately; Adjust keeps the
+        // existing behavior for manually selected/adjusted regions.
         copyToClipboard();
     }
     else if (stage == CapStage::Long && capLong && capLong->hasImage()) {
@@ -891,5 +941,3 @@ bool WinCap::getCutPixels(std::vector<BYTE>& pixels, int& cw, int& ch)
     ch = (int)cutH;
     return true;
 }
-
-
