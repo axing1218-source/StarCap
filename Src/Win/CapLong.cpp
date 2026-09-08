@@ -331,6 +331,9 @@ CapLong::~CapLong()
 
 void CapLong::dispose()
 {
+    if (resizingSelection && GetCapture() == win->hwnd) ReleaseCapture();
+    resizingSelection = false;
+    win->isPress = false;
     win->killTimer(autoScrollTimerId);
     win->killTimer(frameCaptureTimerId);
     uninstallControlHook();
@@ -350,15 +353,76 @@ void CapLong::paint(ID2D1DeviceContext* ctx)
 
 void CapLong::setCursor()
 {
+    if (canResizeSelection()) {
+        POINT pos{};
+        GetCursorPos(&pos);
+        ScreenToClient(win->hwnd, &pos);
+        switch (win->cutMask->hitTest(pos))
+        {
+        case MaskHit::TopLeft:
+        case MaskHit::BottomRight:
+            SetCursor(LoadCursor(nullptr, IDC_SIZENWSE));
+            return;
+        case MaskHit::TopRight:
+        case MaskHit::BottomLeft:
+            SetCursor(LoadCursor(nullptr, IDC_SIZENESW));
+            return;
+        case MaskHit::Top:
+        case MaskHit::Bottom:
+            SetCursor(LoadCursor(nullptr, IDC_SIZENS));
+            return;
+        case MaskHit::Left:
+        case MaskHit::Right:
+            SetCursor(LoadCursor(nullptr, IDC_SIZEWE));
+            return;
+        default:
+            break;
+        }
+    }
     SetCursor(LoadCursor(nullptr, IDC_ARROW));
 }
 
-void CapLong::onMove(POINT)
+void CapLong::onDown(POINT pos)
 {
+    if (!canResizeSelection()) return;
+    auto hit = win->cutMask->hitTest(pos);
+    if (hit == MaskHit::None || hit == MaskHit::Inside) return;
+
+    resizingSelection = true;
+    win->isPress = true;
+    win->killTimer(frameCaptureTimerId);
+    win->killTimer(autoScrollTimerId);
+    win->restoreWin();
+    SetCapture(win->hwnd);
+    win->cutMask->startAdjust(pos);
+    if (tool) tool->hide();
+    StarCapDiag::append(std::format(L"[long-next] resize-begin hit={}", static_cast<int>(hit)));
+    win->refresh();
 }
 
-void CapLong::onUp(POINT)
+void CapLong::onMove(POINT pos)
 {
+    if (!resizingSelection) return;
+    win->cutMask->adjust(pos);
+}
+
+void CapLong::onUp(POINT pos)
+{
+    if (!resizingSelection) return;
+    win->cutMask->adjust(pos);
+    resizingSelection = false;
+    win->isPress = false;
+    if (GetCapture() == win->hwnd) ReleaseCapture();
+
+    // Re-open the interior to the target application before re-capturing the new first frame.
+    win->hollowWin();
+    restartForCurrentRect();
+    if (tool) {
+        layoutTool();
+        tool->show();
+    }
+    StarCapDiag::append(std::format(L"[long-next] resize-end rect={}x{}", imgW, imgH));
+    win->refresh();
 }
 
 void CapLong::scheduleFrameCapture(int delayMs)
@@ -421,6 +485,43 @@ void CapLong::firstStep()
     makeImgPreview();
     setState(CaptureState::Ready, L"initialized");
     scheduleFrameCapture(frameCaptureMs);
+}
+
+void CapLong::restartForCurrentRect()
+{
+    win->killTimer(autoScrollTimerId);
+    win->killTimer(frameCaptureTimerId);
+    autoScroll = false;
+    if (tool) tool->setAutoRunning(false);
+    releaseUiaScroll();
+
+    slicesInitialized = false;
+    materializedDirty = false;
+    storageLimitReached = false;
+    noProgressFrames = 0;
+    rejectedFrames = 0;
+    acceptedFrames = 0;
+    scrollSequence = 0;
+    staticTop = 0;
+    staticBottom = 0;
+    bodyHeight = 0;
+    resultH = 0;
+    imgW = 0;
+    imgH = 0;
+
+    frameRing.clear();
+    committedFrame.clear();
+    imgData.clear();
+    headerData.clear();
+    footerData.clear();
+    bodyChunks.clear();
+    imgPreview.Reset();
+    layoutTextEnd.Reset();
+    stopTextRect = {};
+    stopTextPos = {};
+    state = CaptureState::Ready;
+
+    firstStep();
 }
 
 void CapLong::captureFrame()

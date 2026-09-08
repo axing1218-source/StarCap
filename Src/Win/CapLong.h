@@ -12,6 +12,7 @@ public:
     ~CapLong();
 
     void dispose();
+    void onDown(POINT pos);
     void onMove(POINT pos);
     void onUp(POINT pos);
     void onTimerCB(UINT timerId);
@@ -32,6 +33,7 @@ public:
     void startAutoScroll();
     void toggleAutoScroll();
     bool isAutoScrolling() const { return autoScroll; }
+    bool canResizeSelection() const { return isCapturing && !isFinish && !autoScroll && acceptedFrames == 0; }
     void hotkeyEnter();
     void hotkeyEscape();
 
@@ -80,6 +82,7 @@ private:
     };
 
     void firstStep();
+    void restartForCurrentRect();
     void makeTool();
     void makeImgPreview();
     void paintImgPreview(ID2D1DeviceContext* ctx);
@@ -126,6 +129,7 @@ private:
     bool slicesInitialized{ false };
     bool materializedDirty{ false };
     bool storageLimitReached{ false };
+    bool resizingSelection{ false };
 
     CaptureState state{ CaptureState::Ready };
     ScrollStrategy scrollStrategy{ ScrollStrategy::Uia };

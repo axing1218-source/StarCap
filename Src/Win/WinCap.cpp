@@ -448,6 +448,9 @@ void WinCap::onDown(POINT pos, bool isRight)
         cutMask->startAdjust(pos);
         if (toolCap) toolCap->hide();
     }
+    else if (stage == CapStage::Long && capLong) {
+        capLong->onDown(pos);
+    }
 }
 
 void WinCap::onMove(POINT pos)

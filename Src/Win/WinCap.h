@@ -10,6 +10,7 @@ class CapVideo;
 class WinCap:public Ling::WinBase
 {
 	friend class CutMask;
+	friend class CapLong;
 public:
 	~WinCap();
 	static void init();

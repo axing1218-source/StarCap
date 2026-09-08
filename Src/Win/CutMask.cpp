@@ -9,6 +9,7 @@
 #include <include/Ling.h>
 #include "CutMask.h"
 #include "WinCap.h"
+#include "CapLong.h"
 #include "../Util.h"
 #include "../Setting.h"
 #include "../StarCapOcr.h"
@@ -638,8 +639,10 @@ void CutMask::adjust(POINT pos)
 
 void CutMask::paintHandles(ID2D1DeviceContext* ctx)
 {
-	if (!ctx || !hasRect() || hideLabel || !brushHandle) return;
+	if (!ctx || !hasRect() || !brushHandle) return;
 	auto* cap = static_cast<WinCap*>(win);
+	const bool longResize = cap && cap->stage == WinCap::CapStage::Long && cap->capLong && cap->capLong->canResizeSelection();
+	if (hideLabel && !longResize) return;
 	// Automatic element/window hover is only a preview: show the clean blue
 	// outline without resize handles. Handles appear while manually dragging a
 	// new selection and after the selection enters Adjust mode.
