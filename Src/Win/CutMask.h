@@ -44,9 +44,13 @@ private:
 	};
 
 	void initWinRect();
-	D2D1_RECT_F detectRegionAt(POINT pos, HWND* matchedWindow = nullptr);
+	D2D1_RECT_F detectRegionAt(POINT pos, HWND* matchedWindow = nullptr, bool precise = false);
 	D2D1_RECT_F detectUiElementRect(HWND hwnd, POINT localPos, const D2D1_RECT_F& fallback);
 	D2D1_RECT_F detectNativeChildRect(HWND hwnd, POINT localPos, const D2D1_RECT_F& fallback) const;
+	void schedulePreciseHover(POINT pos, HWND hwnd);
+	void cancelPreciseHover();
+	void onHoverTimer(UINT id);
+	bool autoPreciseEligible(HWND hwnd) const;
 	D2D1_RECT_F monitorRectAt(POINT localPos) const;
 	void applyDetectedRect(const D2D1_RECT_F& rect, bool refreshWindow);
 	void makeLayout();
@@ -92,6 +96,7 @@ private:
 	winrt::event_token onMouseMoveToken{};
 	winrt::event_token onKeyDownToken{};
 	winrt::event_token onMouseUpToken{};
+	winrt::event_token onTimerToken{};
 	float paddingTop{ 2.f }, paddingMargin{3.f};
 	MaskHit adjustHit{ MaskHit::None };
 	D2D1_RECT_F adjustStartRect{};
@@ -101,11 +106,15 @@ private:
 	bool colorHex{ false };
 	// UIA/MSAA element walking can be expensive in Qt and some desktop apps.
 	// Keep the normal hover path cheap; Tab explicitly enables deep element detection.
-	bool detectUiElements{ false };
+	bool detectUiElements{ true };
 	bool fullScreenToggle{ false };
 	bool legacyMagnifierSuppressed{ false };
 	bool initialDetectionDone{ false };
 	bool imeDisabled{ false };
+	POINT preciseHoverPos{ INT_MAX, INT_MAX };
+	HWND preciseHoverHwnd{ nullptr };
+	static constexpr UINT preciseHoverTimerId{ 0x5A31 };
+	static constexpr UINT preciseHoverDelayMs{ 130 };
 	size_t historyCursor{ 0 };
 	static constexpr float minSize{ 4.f };
 	static std::vector<D2D1_RECT_F> regionHistory;

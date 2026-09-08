@@ -148,6 +148,7 @@ CutMask::CutMask(Ling::WinBase* win) : win{ win }
 		if (!cap) return;
 		if (cap->stage == WinCap::CapStage::Adjust && hasRect()) historyCursor = regionHistory.size();
 	});
+	onTimerToken = win->onTimer.add([this](UINT id) { onHoverTimer(id); });
 
 	historyCursor = regionHistory.size();
 	initWinRect();
@@ -159,9 +160,11 @@ CutMask::~CutMask()
 	if (magnifierPopup) magnifierPopup->close();
 	rememberRegion();
 	if (win) {
+		cancelPreciseHover();
 		win->onMouseMove.remove(onMouseMoveToken);
 		win->onKeyDown.remove(onKeyDownToken);
 		win->onMouseUp.remove(onMouseUpToken);
+		win->onTimer.remove(onTimerToken);
 	}
 }
 
@@ -421,7 +424,7 @@ D2D1_RECT_F CutMask::detectUiElementRect(HWND hwnd, POINT localPos, const D2D1_R
 	return detectNativeChildRect(hwnd, localPos, fallback);
 }
 
-D2D1_RECT_F CutMask::detectRegionAt(POINT pos, HWND* matchedWindow)
+D2D1_RECT_F CutMask::detectRegionAt(POINT pos, HWND* matchedWindow, bool precise)
 {
 	if (matchedWindow) *matchedWindow = nullptr;
 	for (const auto& item : winRect) {
@@ -431,9 +434,63 @@ D2D1_RECT_F CutMask::detectRegionAt(POINT pos, HWND* matchedWindow)
 		if (wcscmp(cls, L"Progman") == 0 || wcscmp(cls, L"WorkerW") == 0)
 			return monitorRectAt(pos);
 		if (matchedWindow) *matchedWindow = item.hwnd;
-		return detectUiElements ? detectUiElementRect(item.hwnd, pos, item.rect) : item.rect;
+		return (precise && detectUiElements) ? detectUiElementRect(item.hwnd, pos, item.rect) : item.rect;
 	}
 	return monitorRectAt(pos);
+}
+
+bool CutMask::autoPreciseEligible(HWND hwnd) const
+{
+	if (!hwnd) return false;
+	wchar_t cls[96]{};
+	GetClassNameW(hwnd, cls, (int)std::size(cls));
+	// Browser accessibility trees are useful and fast enough when queried only
+	// after hover settles. Qt apps (Telegram in particular) can block heavily in
+	// UIA/MSAA, so they stay on instant window snapping unless Tab explicitly
+	// requests element-level detection.
+	if (wcsncmp(cls, L"Qt", 2) == 0) return false;
+	if (wcsstr(cls, L"Chrome_WidgetWin") != nullptr) return true;
+	if (wcscmp(cls, L"MozillaWindowClass") == 0) return true;
+	if (wcscmp(cls, L"ApplicationFrameWindow") == 0) return true;
+	return false;
+}
+
+void CutMask::cancelPreciseHover()
+{
+	if (win && win->hwnd) KillTimer(win->hwnd, preciseHoverTimerId);
+	preciseHoverHwnd = nullptr;
+	preciseHoverPos = { INT_MAX, INT_MAX };
+}
+
+void CutMask::schedulePreciseHover(POINT pos, HWND hwnd)
+{
+	cancelPreciseHover();
+	if (!detectUiElements || !win || !win->hwnd || !autoPreciseEligible(hwnd)) return;
+	preciseHoverPos = pos;
+	preciseHoverHwnd = hwnd;
+	SetTimer(win->hwnd, preciseHoverTimerId, preciseHoverDelayMs, nullptr);
+}
+
+void CutMask::onHoverTimer(UINT id)
+{
+	if (id != preciseHoverTimerId || !win || !win->hwnd) return;
+	KillTimer(win->hwnd, preciseHoverTimerId);
+	HWND expectedHwnd = preciseHoverHwnd;
+	POINT expectedPos = preciseHoverPos;
+	preciseHoverHwnd = nullptr;
+	preciseHoverPos = { INT_MAX, INT_MAX };
+
+	auto* cap = static_cast<WinCap*>(win);
+	if (!cap || cap->stage != WinCap::CapStage::Select || cap->isPress || !detectUiElements || !expectedHwnd) return;
+	POINT live{};
+	GetCursorPos(&live);
+	ScreenToClient(win->hwnd, &live);
+	if (std::abs(live.x - expectedPos.x) > 2 || std::abs(live.y - expectedPos.y) > 2) return;
+
+	HWND matched{};
+	auto rect = detectRegionAt(live, &matched, true);
+	if (matched != expectedHwnd || !validRect(rect)) return;
+	applyDetectedRect(rect, true);
 }
 
 void CutMask::applyDetectedRect(const D2D1_RECT_F& rect, bool refreshWindow)
@@ -449,7 +506,8 @@ bool CutMask::highlight(POINT pos)
 {
 	cursorPos = pos;
 	HWND matched{};
-	auto rect = detectRegionAt(pos, &matched);
+	auto rect = detectRegionAt(pos, &matched, false);
+	schedulePreciseHover(pos, matched);
 	if (!validRect(rect) || sameRectRounded(rect, maskRect)) return false;
 	applyDetectedRect(rect, true);
 	return true;
@@ -1240,10 +1298,13 @@ void CutMask::handleCaptureKey(UINT key)
 	}
 	if (!ctrl && !alt && cap->stage == WinCap::CapStage::Select && !cap->isPress && key == VK_TAB) {
 		detectUiElements = !detectUiElements;
+		cancelPreciseHover();
 		POINT p{};
 		GetCursorPos(&p);
 		ScreenToClient(win->hwnd, &p);
-		applyDetectedRect(detectRegionAt(p), true);
+		// Tab is explicit user intent: when element mode is enabled, run the full
+		// UIA/MSAA path immediately even for applications excluded from auto-hover.
+		applyDetectedRect(detectRegionAt(p, nullptr, detectUiElements), true);
 		return;
 	}
 	if (ctrl && key == 'A') {
