@@ -10,7 +10,7 @@ enum class MaskHit { None, Inside, Left, Top, Right, Bottom, TopLeft, TopRight, 
 
 // 截图遮罩与截图阶段辅助 UI。
 // 交互按 Snipaste 的截图阶段重新整理：
-// - 自动吸附窗口，并可用 Tab 切到 UI 元素检测；
+// - 默认快速吸附窗口/原生子窗口；需要 UI 元素级细分时用 Tab 显式开启；
 // - 尺寸标签只显示在选区外，外部无空间时隐藏；
 // - 鼠标在选区内时，于右下显示像素放大镜、坐标和 RGB/HEX 取色；
 // - 选区确定后放大镜使用独立最上层窗口，可覆盖截图工具栏；
@@ -99,7 +99,9 @@ private:
 	COLORREF sampledColor{ RGB(0, 0, 0) };
 	POINT sampledPos{ INT_MAX, INT_MAX };
 	bool colorHex{ false };
-	bool detectUiElements{ true };
+	// UIA/MSAA element walking can be expensive in Qt and some desktop apps.
+	// Keep the normal hover path cheap; Tab explicitly enables deep element detection.
+	bool detectUiElements{ false };
 	bool fullScreenToggle{ false };
 	bool legacyMagnifierSuppressed{ false };
 	bool initialDetectionDone{ false };
