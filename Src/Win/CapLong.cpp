@@ -744,17 +744,43 @@ void CapLong::layoutTool()
 
     int rightX = static_cast<int>(r.right) + gap;
     int leftX = static_cast<int>(r.left) - toolW - gap;
-    int x = 0;
-    if (rightX + toolW <= winW) x = rightX;
-    else if (leftX >= 0) x = leftX;
-    else x = std::max(0, std::min(winW - toolW, static_cast<int>(r.right) - toolW - gap));
+    int belowY = static_cast<int>(r.bottom) + gap;
+    int aboveY = static_cast<int>(r.top) - toolH - gap;
 
-    int y = static_cast<int>(r.bottom) - toolH;
-    y = std::max(0, std::min(winH - toolH, y));
+    int x = 0;
+    int y = 0;
+    const wchar_t* placement = L"inside";
+
+    if (rightX + toolW <= winW) {
+        x = rightX;
+        y = std::max(0, std::min(winH - toolH, static_cast<int>(r.bottom) - toolH));
+        placement = L"right";
+    }
+    else if (leftX >= 0) {
+        x = leftX;
+        y = std::max(0, std::min(winH - toolH, static_cast<int>(r.bottom) - toolH));
+        placement = L"left";
+    }
+    else if (belowY + toolH <= winH) {
+        x = std::max(0, std::min(winW - toolW, static_cast<int>((r.left + r.right - toolW) / 2.0f)));
+        y = belowY;
+        placement = L"below";
+    }
+    else if (aboveY >= 0) {
+        x = std::max(0, std::min(winW - toolW, static_cast<int>((r.left + r.right - toolW) / 2.0f)));
+        y = aboveY;
+        placement = L"above";
+    }
+    else {
+        x = std::max(0, std::min(winW - toolW, static_cast<int>(r.right) - toolW - gap));
+        y = std::max(0, std::min(winH - toolH, static_cast<int>(r.bottom) - toolH));
+    }
 
     POINT pos{ x, y };
     ClientToScreen(win->hwnd, &pos);
     tool->setPosition(pos.x, pos.y);
+    StarCapDiag::append(std::format(L"[long-next] toolbar-placement={} pos={},{} size={}x{}",
+        placement, x, y, toolW, toolH));
 }
 
 void CapLong::paintImgPreview(ID2D1DeviceContext* ctx)
