@@ -34,11 +34,9 @@ void ToolLong::onCreated()
     body->setAlignItems(Ling::Align::Center);
     body->setFlexDirection(Ling::FlexDirection::Row);
 
-    // Do not create hover tooltips for long capture. The long-capture frame source is a
-    // desktop BitBlt, so any StarCap tooltip/window that overlaps the selected region can
-    // become part of the stitched image. The toolbar already exposes status icons and the
-    // important controls also have keyboard shortcuts (Space / Enter / Esc), so a clean
-    // capture is more important than hover help here.
+    // Long capture intentionally has no hover tooltips. The frame source is a
+    // desktop BitBlt, so auxiliary StarCap windows can become part of a stitched
+    // image when they overlap the selected region.
     for (size_t i = 0; i < btnIds.size(); i++)
     {
         auto btn = body->makeChild<Ling::Button>();
@@ -48,12 +46,7 @@ void ToolLong::onCreated()
         btn->setFlexGrow(1.f);
         btn->setHoverBg(0xF2F2F2ff);
 
-        if (btnIds[i] == L"status") {
-            statusBtn = btn;
-            btn->setFontFamily(L"Microsoft YaHei");
-            btn->setFontSize(13.f);
-        }
-        else if (btnIds[i] == L"auto" || btnIds[i] == L"translate") {
+        if (btnIds[i] == L"auto" || btnIds[i] == L"translate") {
             btn->setFontFamily(L"Microsoft YaHei");
             btn->setFontSize(12.f);
             if (btnIds[i] == L"auto") autoBtn = btn;
@@ -69,9 +62,10 @@ void ToolLong::onCreated()
     show();
 }
 
-void ToolLong::setCaptureStatus(const std::wstring& code)
+void ToolLong::setCaptureStatus(const std::wstring&)
 {
-    if (statusBtn) statusBtn->setText(code);
+    // Deliberately no-op. Capture state continues to be written to diagnostics,
+    // but changing a visible glyph every frame caused needless toolbar repaints.
 }
 
 void ToolLong::setAutoRunning(bool running)
@@ -81,8 +75,6 @@ void ToolLong::setAutoRunning(bool running)
 
 void ToolLong::onClick(Ling::Button* btn)
 {
-    if (btn->id == L"status") return;
-
     if (btn->id == L"auto") {
         if (capLong) capLong->toggleAutoScroll();
         return;
