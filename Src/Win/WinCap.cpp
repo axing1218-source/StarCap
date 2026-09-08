@@ -17,6 +17,47 @@ namespace
     constexpr float scaleNum{ 5.f }, srcW{ 50.f }, srcH{ 30.f };
     constexpr float pixImgH{ scaleNum * srcH };
     constexpr float pixW{ srcW * scaleNum };
+
+    HHOOK gCaptureEscapeHook = nullptr;
+    HWND gCaptureEscapeWindow = nullptr;
+    bool gCaptureEscapeDown = false;
+
+    LRESULT CALLBACK captureEscapeProc(int code, WPARAM wParam, LPARAM lParam)
+    {
+        if (code == HC_ACTION && gCaptureEscapeWindow) {
+            auto* kb = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
+            const bool down = wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN;
+            const bool up = wParam == WM_KEYUP || wParam == WM_SYSKEYUP;
+            if (kb->vkCode == VK_ESCAPE) {
+                if (down && !gCaptureEscapeDown) {
+                    gCaptureEscapeDown = true;
+                    if (IsWindow(gCaptureEscapeWindow))
+                        PostMessageW(gCaptureEscapeWindow, WM_CLOSE, 0, 0);
+                }
+                if (up) gCaptureEscapeDown = false;
+                return 1;
+            }
+        }
+        return CallNextHookEx(gCaptureEscapeHook, code, wParam, lParam);
+    }
+
+    void installCaptureEscapeHook(HWND hwnd)
+    {
+        gCaptureEscapeWindow = hwnd;
+        gCaptureEscapeDown = false;
+        if (!gCaptureEscapeHook)
+            gCaptureEscapeHook = SetWindowsHookExW(WH_KEYBOARD_LL, captureEscapeProc, GetModuleHandleW(nullptr), 0);
+    }
+
+    void uninstallCaptureEscapeHook()
+    {
+        if (gCaptureEscapeHook) {
+            UnhookWindowsHookEx(gCaptureEscapeHook);
+            gCaptureEscapeHook = nullptr;
+        }
+        gCaptureEscapeWindow = nullptr;
+        gCaptureEscapeDown = false;
+    }
 }
 
 std::unique_ptr<WinCap> winCap;
@@ -90,6 +131,7 @@ void WinCap::onCreated()
     getPixImg(pos);
     setPixPos(pos);
     show();
+    installCaptureEscapeHook(hwnd);
 }
 
 void WinCap::layout()
@@ -400,10 +442,11 @@ void WinCap::onDown(POINT pos, bool isRight)
         cutMask->startMakeRect(pos);
     }
     else if (stage == CapStage::Adjust) {
-        // 选区外面按下不是重新框选，而是按落点所在的那一块调对应的边或角
+        // During a drag keep the toolbar stationary/off-screen instead of moving a
+        // separate topmost HWND on every WM_MOUSEMOVE. Reposition once on mouse-up.
         isPress = true;
         cutMask->startAdjust(pos);
-        layoutTool(toolCap.get());
+        if (toolCap) toolCap->hide();
     }
 }
 
@@ -423,8 +466,6 @@ void WinCap::onMove(POINT pos)
     else if (stage == CapStage::Adjust) {
         if (!isPress) return;
         cutMask->adjust(pos);
-        // 选区变了，工具条跟着走位
-        layoutTool(toolCap.get());
     }
     else if (stage == CapStage::Long && capLong) {
         capLong->onMove(pos);
@@ -454,6 +495,11 @@ void WinCap::onUp(POINT pos, bool isRight)
     }
     else if (stage == CapStage::Adjust) {
         isPress = false;
+        if (toolCap) {
+            layoutTool(toolCap.get());
+            toolCap->show();
+        }
+        cutMask->syncMagnifier(pos);
     }
     else if (stage == CapStage::Long && capLong) {
         capLong->onUp(pos);
@@ -467,6 +513,7 @@ void WinCap::onClosed()
 {
     if (isClosed) return;
     isClosed = true;
+    uninstallCaptureEscapeHook();
     if (capVideo) capVideo->dispose();
     if (capLong) capLong->dispose();
     if (toolCap) toolCap->close();
@@ -582,6 +629,8 @@ void WinCap::layoutTool(Ling::WinBase* tool)
 
 void WinCap::enterLiveStage()
 {
+    // Long capture has its own keyboard control hook; video must not globally steal Esc.
+    uninstallCaptureEscapeHook();
     // 底图是拖框那一刻的静态截图，从这里开始不能再画它 ——
     // 否则录屏和滚动截图从屏幕上拿到的都是这张死图。只留遮罩，选区内是透明的洞。
     hideScreenImg = true;

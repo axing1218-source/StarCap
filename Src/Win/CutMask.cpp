@@ -861,7 +861,7 @@ void CutMask::hideMagnifierPopup()
 void CutMask::updateMagnifierPopup(POINT live)
 {
     auto* cap = static_cast<WinCap*>(win);
-    if (!cap || hideLabel || cap->stage != WinCap::CapStage::Adjust ||
+    if (!cap || hideLabel || cap->stage != WinCap::CapStage::Adjust || cap->isPress ||
         !hasRect() || !pointInRect(maskRect, live)) {
         hideMagnifierPopup();
         return;
@@ -934,8 +934,11 @@ void CutMask::paintMagnifier(ID2D1DeviceContext* ctx)
         return;
     }
 
-    // Adjust stage uses its own topmost popup so the magnifier can cover ToolCap.
-    if (cap->stage == WinCap::CapStage::Adjust) {
+    // While idle in Adjust, keep the native popup so it can cover ToolCap.
+    // While actively resizing/moving a selection, keep all feedback on the host
+    // swap-chain canvas; moving two separate topmost windows on every mouse move
+    // caused visible flashing, especially when extending the bottom edge.
+    if (cap->stage == WinCap::CapStage::Adjust && !cap->isPress) {
         updateMagnifierPopup(live);
         return;
     }
