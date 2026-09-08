@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include <include/Ling.h>
 #include <UIAutomation.h>
 #include <algorithm>
@@ -631,7 +631,7 @@ void CapLong::onUp(POINT pos)
 
 void CapLong::scheduleFrameCapture(int delayMs)
 {
-    if (!isCapturing || isFinish) return;
+    if (!isCapturing || isFinish || hardPaused) return;
     win->setTimer(delayMs, frameCaptureTimerId);
 }
 
@@ -645,15 +645,14 @@ void CapLong::onTimerCB(UINT timerId)
 {
     if (timerId == frameCaptureTimerId) {
         win->killTimer(frameCaptureTimerId);
-        if (!isCapturing || isFinish) return;
+        if (!isCapturing || isFinish || hardPaused) return;
         captureFrame();
         scheduleFrameCapture(frameCaptureMs);
     }
     else if (timerId == autoScrollTimerId) {
         win->killTimer(autoScrollTimerId);
-        if (!isCapturing || isFinish || !autoScroll) return;
+        if (!isCapturing || isFinish || !autoScroll || hardPaused || autoStepPending) return;
         dispatchAutoScroll();
-        scheduleAutoScroll(autoScrollMs);
     }
 }
 
@@ -696,6 +695,8 @@ void CapLong::restartForCurrentRect()
     win->killTimer(autoScrollTimerId);
     win->killTimer(frameCaptureTimerId);
     autoScroll = false;
+    hardPaused = false;
+    resetAutoStepState();
     if (tool) tool->setAutoRunning(false);
     releaseUiaScroll();
 
@@ -730,6 +731,7 @@ void CapLong::restartForCurrentRect()
 
 void CapLong::captureFrame()
 {
+    if (hardPaused) return;
     auto data = Util::captureScreen(capStartPos.x, capStartPos.y, imgW, imgH);
     if (data.empty()) {
         StarCapDiag::append(L"[long-next] frame-empty");
@@ -740,24 +742,77 @@ void CapLong::captureFrame()
 
 void CapLong::processFrame(std::vector<BYTE> data)
 {
-    if (data.size() != committedFrame.size() || data.empty()) return;
+    if (hardPaused || data.size() != committedFrame.size() || data.empty()) return;
 
     frameRing.push_back({ data, GetTickCount64() });
     if (frameRing.size() > maxFrameRing) frameRing.erase(frameRing.begin());
+
+    // Serialize automatic capture: one wheel -> wait for visible motion -> wait until the
+    // candidate stops changing -> match/commit once -> only then issue the next wheel.
+    if (autoScroll && autoStepPending) {
+        ++autoStepFrames;
+        double committedSame = sampledSameRatio(committedFrame, data, imgW, imgH);
+        if (committedSame < 0.992) autoStepSawMotion = true;
+
+        double observedSame = 0.0;
+        if (!autoLastObservedFrame.empty())
+            observedSame = sampledSameRatio(autoLastObservedFrame, data, imgW, imgH);
+        autoLastObservedFrame = data;
+
+        if (autoStepSawMotion && observedSame >= 0.992) ++autoStableFrames;
+        else autoStableFrames = 0;
+
+        bool stableEnough = autoStepSawMotion && autoStableFrames >= 1;
+        bool forceLatest = autoStepSawMotion && autoStepFrames >= 10;
+        if (!stableEnough && !forceLatest) {
+            if (!autoStepSawMotion && autoStepFrames >= 6) {
+                resetAutoStepState();
+                ++noProgressFrames;
+                StarCapDiag::append(std::format(L"[long-next] auto-step-no-motion noProgress={}", noProgressFrames));
+                if (noProgressFrames >= noProgressBeforeFallback) {
+                    noProgressFrames = 0;
+                    if (!advanceScrollStrategy()) pauseAuto(L"no-progress");
+                    else scheduleAutoScroll(45);
+                }
+                else scheduleAutoScroll(45);
+            }
+            return;
+        }
+
+        StarCapDiag::append(std::format(L"[long-next] auto-step-stable frames={} stable={} forced={} committedSame={:.4f} observedSame={:.4f}",
+            autoStepFrames, autoStableFrames, forceLatest ? 1 : 0, committedSame, observedSame));
+    }
 
     MatchResult match = matchFrame(committedFrame, data);
     if (match.duplicate) {
         rejectedFrames = 0;
         if (autoScroll) {
+            resetAutoStepState();
             ++noProgressFrames;
             if (noProgressFrames >= noProgressBeforeFallback) {
                 noProgressFrames = 0;
                 if (!advanceScrollStrategy()) pauseAuto(L"no-progress");
+                else scheduleAutoScroll(45);
             }
-            else if (state != CaptureState::Mismatch) setState(CaptureState::Waiting, L"no-motion-yet");
+            else {
+                if (state != CaptureState::Mismatch) setState(CaptureState::Waiting, L"no-motion-yet");
+                scheduleAutoScroll(45);
+            }
         }
         else {
             setState(acceptedFrames > 0 ? CaptureState::Confirmed : CaptureState::Ready, L"stable-or-recovered");
+        }
+        return;
+    }
+
+    if (match.accepted && match.offset > 0 && match.offset < 4 && match.expectedOffset < 3.0) {
+        StarCapDiag::append(std::format(L"[long-next] micro-motion-ignored offset={} score={:.5f} mad={:.2f} auto={}",
+            match.offset, match.visualScore, match.pixelMad, autoScroll ? 1 : 0));
+        if (autoScroll) {
+            resetAutoStepState();
+            ++noProgressFrames;
+            scheduleAutoScroll(45);
+            setState(CaptureState::Waiting, L"micro-motion-ignored");
         }
         return;
     }
@@ -791,6 +846,10 @@ void CapLong::processFrame(std::vector<BYTE> data)
     noProgressFrames = 0;
     commitFrame(data, match);
     ++acceptedFrames;
+    if (autoScroll) {
+        resetAutoStepState();
+        scheduleAutoScroll(45);
+    }
     setState(CaptureState::Confirmed, L"seam-confirmed");
 
     StarCapDiag::append(std::format(
@@ -1368,7 +1427,7 @@ bool CapLong::dispatchWheelScroll()
 
 void CapLong::dispatchAutoScroll()
 {
-    if (!autoScroll || !isCapturing || isFinish) return;
+    if (!autoScroll || !isCapturing || isFinish || hardPaused || autoStepPending) return;
     ++scrollSequence;
     setState(CaptureState::Waiting, L"auto-scroll");
 
@@ -1379,7 +1438,15 @@ void CapLong::dispatchAutoScroll()
     if (!dispatched) {
         StarCapDiag::append(std::format(L"[long-next] auto-dispatch-failed strategy={}", static_cast<int>(scrollStrategy)));
         if (!advanceScrollStrategy()) pauseAuto(L"scroll-driver-unavailable");
+        else scheduleAutoScroll(45);
+        return;
     }
+
+    autoStepPending = true;
+    autoStepSawMotion = false;
+    autoStepFrames = 0;
+    autoStableFrames = 0;
+    autoLastObservedFrame = committedFrame;
 }
 
 bool CapLong::advanceScrollStrategy()
@@ -1397,24 +1464,46 @@ bool CapLong::advanceScrollStrategy()
     return true;
 }
 
-void CapLong::pauseAuto(const wchar_t* reason)
+void CapLong::resetAutoStepState()
 {
-    if (!autoScroll) return;
+    autoStepPending = false;
+    autoStepSawMotion = false;
+    autoStepFrames = 0;
+    autoStableFrames = 0;
+    autoLastObservedFrame.clear();
+}
+
+void CapLong::pauseAuto(const wchar_t* reason, bool hardPause)
+{
+    if (!autoScroll && !hardPaused) return;
     autoScroll = false;
+    resetAutoStepState();
     win->killTimer(autoScrollTimerId);
+    if (hardPause) {
+        hardPaused = true;
+        win->killTimer(frameCaptureTimerId);
+    }
     if (tool) tool->setAutoRunning(false);
     setState(CaptureState::Paused, reason);
-    StarCapDiag::append(std::format(L"[long-next] auto-paused reason={} resultH={} accepted={} rejected={} strategy={}",
-        reason ? reason : L"?", resultH, acceptedFrames, rejectedFrames, static_cast<int>(scrollStrategy)));
+    StarCapDiag::append(std::format(L"[long-next] auto-paused reason={} hard={} resultH={} accepted={} rejected={} strategy={}",
+        reason ? reason : L"?", hardPause ? 1 : 0, resultH, acceptedFrames, rejectedFrames, static_cast<int>(scrollStrategy)));
 }
 
 void CapLong::startAutoScroll()
 {
     if (!isCapturing || isFinish || autoScroll) return;
+    if (hardPaused) {
+        hardPaused = false;
+        frameRing.clear();
+        resetAutoStepState();
+        scheduleFrameCapture(15);
+        StarCapDiag::append(std::format(L"[long-next] hard-pause-resume resultH={} accepted={}", resultH, acceptedFrames));
+    }
     resolveScrollTargets();
     if (!uiaScrollPattern) initializeUiaScroll();
     if (!uiaScrollPattern && scrollStrategy == ScrollStrategy::Uia) scrollStrategy = ScrollStrategy::ChildWheel;
     autoScroll = true;
+    resetAutoStepState();
     rejectedFrames = 0;
     noProgressFrames = 0;
     if (tool) tool->setAutoRunning(true);
@@ -1425,7 +1514,7 @@ void CapLong::startAutoScroll()
 void CapLong::toggleAutoScroll()
 {
     if (!isCapturing || isFinish) return;
-    if (autoScroll) pauseAuto(L"user-pause");
+    if (autoScroll) pauseAuto(L"user-pause", true);
     else startAutoScroll();
 }
 
@@ -1470,6 +1559,8 @@ void CapLong::stopCap(bool showMessage)
     isFinish = true;
     isCapturing = false;
     autoScroll = false;
+    hardPaused = false;
+    resetAutoStepState();
     if (tool) tool->setAutoRunning(false);
     win->killTimer(autoScrollTimerId);
     win->killTimer(frameCaptureTimerId);

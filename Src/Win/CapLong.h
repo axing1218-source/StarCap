@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <include/Ling.h>
 #include "../StarCapOcr.h"
 
@@ -114,7 +114,8 @@ private:
     bool dispatchWheelScroll();
     void dispatchAutoScroll();
     bool advanceScrollStrategy();
-    void pauseAuto(const wchar_t* reason);
+    void pauseAuto(const wchar_t* reason, bool hardPause = false);
+    void resetAutoStepState();
 
     void installControlHook();
     void uninstallControlHook();
@@ -130,6 +131,9 @@ private:
     bool materializedDirty{ false };
     bool storageLimitReached{ false };
     bool resizingSelection{ false };
+    bool hardPaused{ false };
+    bool autoStepPending{ false };
+    bool autoStepSawMotion{ false };
 
     CaptureState state{ CaptureState::Ready };
     ScrollStrategy scrollStrategy{ ScrollStrategy::Uia };
@@ -137,6 +141,8 @@ private:
     int rejectedFrames{ 0 };
     int acceptedFrames{ 0 };
     int scrollSequence{ 0 };
+    int autoStepFrames{ 0 };
+    int autoStableFrames{ 0 };
 
     D2D1_RECT_F stopTextRect{};
     D2D1_POINT_2F stopTextPos{};
@@ -160,6 +166,7 @@ private:
 
     std::vector<Frame> frameRing;
     std::vector<BYTE> committedFrame;
+    std::vector<BYTE> autoLastObservedFrame;
     std::vector<BYTE> imgData;
 
     std::vector<BYTE> headerData;
