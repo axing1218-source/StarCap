@@ -114,7 +114,8 @@ private:
     bool dispatchWheelScroll();
     void dispatchAutoScroll();
     bool advanceScrollStrategy();
-    void pauseAuto(const wchar_t* reason);
+    void resetAutoStep();
+    void pauseAuto(const wchar_t* reason, bool hardPause = false);
 
     void installControlHook();
     void uninstallControlHook();
@@ -126,6 +127,8 @@ private:
     bool isCapturing{ false };
     bool isFinish{ false };
     bool autoScroll{ false };
+    bool hardPaused{ false };
+    bool autoStepPending{ false };
     bool slicesInitialized{ false };
     bool materializedDirty{ false };
     bool storageLimitReached{ false };
@@ -137,6 +140,7 @@ private:
     int rejectedFrames{ 0 };
     int acceptedFrames{ 0 };
     int scrollSequence{ 0 };
+    int autoStepFrames{ 0 };
 
     D2D1_RECT_F stopTextRect{};
     D2D1_POINT_2F stopTextPos{};
