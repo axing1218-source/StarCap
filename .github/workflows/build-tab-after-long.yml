@@ -1,0 +1,67 @@
+name: Build Tab After Long Capture Fix
+
+on:
+  push:
+    branches:
+      - fix/tab-after-long-capture
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout StarCap
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Prepare pinned Ling dependency
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $lingCommit = 'b77448ec7e72b1b961d3c6f8f87502d8df72aa5f'
+          New-Item -ItemType Directory -Force D:\project | Out-Null
+          if (Test-Path D:\project\Ling) { Remove-Item -Recurse -Force D:\project\Ling }
+          git clone --no-checkout https://github.com/xland/Ling.git D:\project\Ling
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C D:\project\Ling checkout --detach $lingCommit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $utilPath = 'D:\project\Ling\include\Util.h'
+          $util = Get-Content $utilPath -Raw
+          $util = $util.Replace('constexpr auto gen = [](size_t i, size_t idx) {', 'constexpr auto gen = [](std::wstring_view chars, size_t i, size_t idx) {')
+          $util = $util.Replace('std::wstring{gen(I, I)...}', 'std::wstring{gen(chars, I, I)...}')
+          Set-Content $utilPath $util -Encoding utf8
+
+          $lingAppPath = 'D:\project\Ling\src\App.cpp'
+          $lingApp = Get-Content $lingAppPath -Raw
+          $oldTrayLine = 'tray->hIcon = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(1));'
+          if (-not $lingApp.Contains($oldTrayLine)) { throw 'Ling tray icon load line changed.' }
+          $newTrayCode = 'tray->hIcon = (HICON)LoadImageW(GetModuleHandle(nullptr), MAKEINTRESOURCE(2), IMAGE_ICON,' + "`r`n" +
+            '            GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);' + "`r`n" +
+            '        if (!tray->hIcon) {' + "`r`n" +
+            '            tray->hIcon = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(1));' + "`r`n" +
+            '        }'
+          $lingApp = $lingApp.Replace($oldTrayLine, $newTrayCode)
+          Set-Content $lingAppPath $lingApp -Encoding utf8
+
+      - name: Build Yoga and Ling
+        shell: pwsh
+        run: |
+          msbuild D:\project\Ling\yoga\yoga.vcxproj /m /p:Configuration=Release /p:Platform=x64 /p:SolutionDir=D:\project\Ling\
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          msbuild D:\project\Ling\Ling.vcxproj /m /p:Configuration=Release /p:Platform=x64 /p:SolutionDir=D:\project\Ling\
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build StarCap
+        shell: pwsh
+        run: |
+          msbuild Src\StarCap.vcxproj /m /p:Configuration=Release /p:Platform=x64 /p:SolutionDir=${{ github.workspace }}\
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: StarCap-v0.10.5-tab-after-long-fix
+          path: x64/Release/StarCap.exe
+          if-no-files-found: error
