@@ -4,6 +4,7 @@
 #include <chrono>
 #include <array>
 #include <format>
+#include <commctrl.h>
 #include <winrt/Windows.Web.Http.h>
 #include <winrt/Windows.Web.Http.Filters.h>
 #include <winrt/Windows.Storage.Streams.h>
@@ -12,6 +13,9 @@
 #include "Setting.h"
 #include "Lang.h"
 #include "Util.h"
+
+#pragma comment(lib, "comctl32.lib")
+#pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 namespace {
     using namespace winrt::Windows::Foundation;
@@ -31,6 +35,8 @@ namespace {
     constexpr UINT initialCheckDelayMs{ 15000 };
     constexpr UINT busyRetryDelayMs{ 60000 };
     constexpr UINT failureRetryDelayMs{ 30 * 60 * 1000 };
+    constexpr int updateNowButtonId{ 1001 };
+    constexpr int laterButtonId{ 1002 };
 
     bool checked{ false };
     UINT_PTR checkTimer{ 0 };
@@ -125,13 +131,53 @@ namespace {
         return true;
     }
 
+    std::wstring formatVersion(const std::array<int, 3>& version)
+    {
+        return std::format(L"{}.{}.{}", version[0], version[1], version[2]);
+    }
+
+    bool showReadyDialog()
+    {
+        const auto currentVer = formatVersion(Ling::Util::getVerNum());
+        const auto title = Lang::get(L"update.title");
+        const auto instruction = L"StarCap v" + newVer + L" " + Lang::get(L"update.ready");
+        const auto content = Lang::get(L"update.currentVersion") + L"v" + currentVer + L"\n" +
+            Lang::get(L"update.newVersion") + L"v" + newVer;
+        const auto updateNow = Lang::get(L"update.updateNow");
+        const auto later = Lang::get(L"update.later");
+
+        TASKDIALOG_BUTTON buttons[] = {
+            { updateNowButtonId, updateNow.c_str() },
+            { laterButtonId, later.c_str() }
+        };
+
+        TASKDIALOGCONFIG config{};
+        config.cbSize = sizeof(config);
+        config.hInstance = GetModuleHandle(nullptr);
+        config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
+        config.pszWindowTitle = title.c_str();
+        config.pszMainIcon = MAKEINTRESOURCEW(1);
+        config.pszMainInstruction = instruction.c_str();
+        config.pszContent = content.c_str();
+        config.cButtons = static_cast<UINT>(std::size(buttons));
+        config.pButtons = buttons;
+        config.nDefaultButton = updateNowButtonId;
+
+        int buttonId = 0;
+        const auto hr = TaskDialogIndirect(&config, &buttonId, nullptr, nullptr);
+        if (SUCCEEDED(hr)) return buttonId == updateNowButtonId;
+
+        // TaskDialog is available on supported Windows versions, but keep a
+        // compact fallback so a missing common-controls activation never blocks
+        // an already-downloaded update.
+        const auto fallback = instruction + L"\n\n" + content;
+        return MessageBox(nullptr, fallback.c_str(), title.c_str(),
+            MB_OKCANCEL | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND) == IDOK;
+    }
+
     void promptRestart()
     {
-        auto title = Lang::get(L"about.sysTip");
-        auto text = std::format(L"{} {}\n\n{}", Lang::get(L"update.found"), newVer, Lang::get(L"update.tip"));
-        auto btnId = MessageBox(nullptr, text.data(), title.data(),
-            MB_OKCANCEL | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND);
-        if (btnId != IDOK) {
+        if (!showReadyDialog()) {
             removeNewExe();
             return;
         }
