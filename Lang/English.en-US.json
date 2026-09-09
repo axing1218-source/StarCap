@@ -9,5 +9,5 @@
   "shortcut": {"cap":"Start capture:","clipboard":"Clipboard window:","pressKey":"Press keys..."},
   "long": {"start":"Start","reachedBottom":"Reached the bottom, capture stopped","tooLong":"Image too long, capture stopped"},
   "util": {"file":"File"},
-  "update": {"found":"New version available","tip":"The new version has been downloaded. Click OK to restart and finish the upgrade.","noPermission":"The program folder is not writable, so it cannot update itself. Click OK to open the download page."}
+  "update": {"title":"StarCap Update","ready":"is ready","currentVersion":"Current version: ","newVersion":"New version: ","updateNow":"Update Now","later":"Later","found":"New version available","tip":"The new version has been downloaded. Click OK to restart and finish the upgrade.","noPermission":"The program folder is not writable, so it cannot update itself. Click OK to open the download page."}
 }

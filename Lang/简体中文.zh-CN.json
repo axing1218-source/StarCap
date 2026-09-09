@@ -9,5 +9,5 @@
   "shortcut": {"cap":"启动截图：","clipboard":"剪贴板窗口：","pressKey":"请按键..."},
   "long": {"start":"开始","reachedBottom":"已触底，截图停止","tooLong":"图像过长，截图停止"},
   "util": {"file":"文件"},
-  "update": {"found":"发现新版本","tip":"新版本已经下载完成，点击\"确定\"立即重启，完成升级","noPermission":"程序所在目录没有写入权限，无法自动升级。点击\"确定\"打开下载页面"}
+  "update": {"title":"StarCap 更新","ready":"已准备就绪","currentVersion":"当前版本：","newVersion":"新版本：","updateNow":"立即更新","later":"稍后","found":"发现新版本","tip":"新版本已经下载完成，点击\"确定\"立即重启，完成升级","noPermission":"程序所在目录没有写入权限，无法自动升级。点击\"确定\"打开下载页面"}
 }
