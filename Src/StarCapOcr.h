@@ -29,7 +29,14 @@ namespace GeminiClient
         const std::wstring& apiKey, const std::wstring& model)
     {
         return translateImage(pixels, width, height, apiKey, model,
-            StarCapTranslationLanguage::activePrompt());
+            StarCapTranslationLanguage::prompt(StarCapTranslationLanguage::defaultIndex()));
+    }
+
+    inline TranslationResult translateImageStarCapTarget(
+        const std::vector<BYTE>& pixels, int width, int height,
+        const std::wstring& apiKey, const std::wstring& model, const std::wstring& targetLanguage)
+    {
+        return translateImage(pixels, width, height, apiKey, model, targetLanguage);
     }
 
     inline TranslationResult translateOcrBlocksStarCapTarget(
@@ -37,7 +44,14 @@ namespace GeminiClient
         const std::wstring& apiKey, const std::wstring& model)
     {
         return translateOcrBlocks(sourceBlocks, apiKey, model,
-            StarCapTranslationLanguage::activePrompt());
+            StarCapTranslationLanguage::prompt(StarCapTranslationLanguage::defaultIndex()));
+    }
+
+    inline TranslationResult translateOcrBlocksStarCapTarget(
+        const std::vector<OcrBlock>& sourceBlocks,
+        const std::wstring& apiKey, const std::wstring& model, const std::wstring& targetLanguage)
+    {
+        return translateOcrBlocks(sourceBlocks, apiKey, model, targetLanguage);
     }
 }
 
@@ -67,26 +81,41 @@ namespace StarCapOcr
         return StarCapOcrV2::hasWindow();
     }
 
+    // Long capture needs the application behind OCR result windows to remain the scroll target.
+    inline std::vector<HWND> captureHiddenWindows;
+
+    inline void suspendForLongCapture()
+    {
+        if (!captureHiddenWindows.empty()) return;
+        for (auto* window : StarCapOcrV2::windows) {
+            if (!window || !window->hwnd || !IsWindow(window->hwnd) || !IsWindowVisible(window->hwnd)) continue;
+            captureHiddenWindows.push_back(window->hwnd);
+            ShowWindow(window->hwnd, SW_HIDE);
+        }
+    }
+
+    inline void restoreAfterLongCapture()
+    {
+        for (HWND hwnd : captureHiddenWindows) {
+            if (hwnd && IsWindow(hwnd)) ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        }
+        captureHiddenWindows.clear();
+    }
+
     inline void showPixels(std::vector<BYTE> pixels, int width, int height, bool fromLongScreenshot = false)
     {
-        if (StarCapOcrV2::activeWindow) StarCapOcrV2::activeWindow->close();
-        StarCapTranslationLanguage::resetSessionToDefault();
         StarCapOcrV2::showPixels(std::move(pixels), width, height, fromLongScreenshot);
         StarCapOcrTranslationLanguageUI::attach(StarCapOcrV2::activeWindow);
     }
 
     inline void showTranslationPixels(std::vector<BYTE> pixels, int width, int height, bool fromLongScreenshot = false)
     {
-        if (StarCapOcrV2::activeWindow) StarCapOcrV2::activeWindow->close();
-        StarCapTranslationLanguage::resetSessionToDefault();
         StarCapOcrV2::showTranslationPixels(std::move(pixels), width, height, fromLongScreenshot);
         StarCapOcrTranslationLanguageUI::attach(StarCapOcrV2::activeWindow);
     }
 
     inline void show(WinCap* win)
     {
-        if (StarCapOcrV2::activeWindow) StarCapOcrV2::activeWindow->close();
-        StarCapTranslationLanguage::resetSessionToDefault();
         StarCapOcrV2::show(win);
         StarCapOcrTranslationLanguageUI::attach(StarCapOcrV2::activeWindow);
     }

@@ -105,10 +105,24 @@
         return L"文本";
     }
 
+    inline std::wstring v099TimeLabel(uint64_t ticks)
+    {
+        auto relative = relativeTime(ticks);
+        ULARGE_INTEGER value{};
+        value.QuadPart = ticks;
+        FILETIME ft{ value.LowPart, value.HighPart };
+        SYSTEMTIME utc{}, local{};
+        if (!FileTimeToSystemTime(&ft, &utc) ||
+            !SystemTimeToTzSpecificLocalTime(nullptr, &utc, &local)) return relative;
+        return std::format(L"{}（{:04}-{:02}-{:02} {:02}:{:02}）", relative,
+            local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute);
+    }
+
     inline void v099DrawBottomMeta(HDC dc, const Item& item, const RECT& panel, bool expandable)
     {
-        RECT timeRc{ panel.left + 14, panel.bottom - 24, panel.left + 130, panel.bottom - 7 };
-        drawText(dc, relativeTime(item.updated), timeRc, v099Faint(), smallFont,
+        RECT timeRc{ panel.left + 14, panel.bottom - 24,
+            std::min(panel.left + 300, panel.right - 185), panel.bottom - 7 };
+        drawText(dc, v099TimeLabel(item.updated), timeRc, v099Faint(), smallFont,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
         std::wstring meta;
