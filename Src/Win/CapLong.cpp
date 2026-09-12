@@ -521,6 +521,7 @@ CapLong::CapLong(WinCap* win) : win(win)
     d2d->deviceContext->CreateSolidColorBrush(D2D1::ColorF(0x000000, 0.68f), bgBrush.GetAddressOf());
 
     isCapturing = true;
+    StarCapOcr::suspendForLongCapture();
     win->hollowWin();
     makeTool();
     firstStep();
@@ -531,6 +532,7 @@ CapLong::~CapLong()
 {
     uninstallControlHook();
     releaseUiaScroll();
+    StarCapOcr::restoreAfterLongCapture();
 }
 
 void CapLong::dispose()
@@ -542,6 +544,7 @@ void CapLong::dispose()
     win->killTimer(frameCaptureTimerId);
     uninstallControlHook();
     releaseUiaScroll();
+    StarCapOcr::restoreAfterLongCapture();
     if (tool) tool->close();
 }
 
@@ -1541,6 +1544,7 @@ void CapLong::stopCap(bool showMessage)
     win->killTimer(frameCaptureTimerId);
     uninstallControlHook();
     releaseUiaScroll();
+    StarCapOcr::restoreAfterLongCapture();
     if (showMessage) makeStopText();
     win->restoreWin();
     win->refresh();

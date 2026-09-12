@@ -18,6 +18,7 @@
 #include "GeminiClient.h"
 #include "StarCapTextGeometry.h"
 #include "StarCapParagraphLayout.h"
+#include "StarCapTranslationLanguage.h"
 
 namespace StarCapOcrV2
 {
@@ -28,8 +29,11 @@ namespace StarCapOcrV2
     };
 
     class OcrResultWindow;
+    // Compatibility pointer to the newest OCR window. Async work is routed by window id.
     inline OcrResultWindow* activeWindow{ nullptr };
-    inline std::atomic<unsigned long long> requestId{ 0 };
+    inline std::vector<OcrResultWindow*> windows;
+    inline std::atomic<unsigned long long> nextWindowId{ 0 };
+    inline OcrResultWindow* findWindowById(unsigned long long id);
 
     inline bool darkMode()
     {
@@ -161,6 +165,8 @@ namespace StarCapOcrV2
         OcrResultWindow(std::vector<BYTE> data, int imgW, int imgH, bool fromLongScreenshot = false)
             : pixels(std::move(data)), imageW(imgW), imageH(imgH), isLongScreenshotSource(fromLongScreenshot)
         {
+            windowId = ++nextWindowId;
+            targetLanguageIndex = StarCapTranslationLanguage::defaultIndex();
             setTitle(L"StarCap - 文字识别 / 翻译");
             setSize(1120.f, 700.f);
             setMinSize(800.f, 460.f);
@@ -192,19 +198,32 @@ namespace StarCapOcrV2
             });
             onSizeChanged.add([this]() { clampImageOffset(); updateZoomLabel(); refresh(); });
             onDestroy.add([this]() {
-                ++requestId;
-                if (activeWindow == this) activeWindow = nullptr;
+                windows.erase(std::remove(windows.begin(), windows.end(), this), windows.end());
+                if (activeWindow == this) activeWindow = windows.empty() ? nullptr : windows.back();
                 auto dying = this;
                 Ling::App::get()->dq.TryEnqueue([dying]() {
                     delete dying;
                     auto app = Ling::App::get();
                     auto it = app->args.find(L"--auto-quit");
-                    if (it != app->args.end() && it->second == L"true" && !WinPin::hasWindow()) app->quit(0);
+                    if (it != app->args.end() && it->second == L"true" &&
+                        windows.empty() && !WinPin::hasWindow()) app->quit(0);
                 });
             });
         }
 
         void open() { createNativeWindow(0, WS_OVERLAPPEDWINDOW); }
+        unsigned long long id() const { return windowId; }
+        int getTargetLanguageIndex() const { return targetLanguageIndex; }
+        void setTargetLanguageIndex(int index) { targetLanguageIndex = StarCapTranslationLanguage::clampIndex(index); }
+        void cascade(size_t ordinal)
+        {
+            if (!hwnd || ordinal <= 1) return;
+            RECT rc{};
+            if (!GetWindowRect(hwnd, &rc)) return;
+            const int offset = 28 * static_cast<int>((ordinal - 1) % 6);
+            SetWindowPos(hwnd, nullptr, rc.left + offset, rc.top + offset, 0, 0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
 
         // Used by direct translation of a stitched long screenshot: open the same viewer but
         // skip a separate OCR request and immediately translate the image.
@@ -835,18 +854,21 @@ namespace StarCapOcrV2
                 : (geminiOcrBlocks.empty()
                     ? L"正在让 Gemini 识别图片并翻译..."
                     : L"正在翻译已识别文字（无需再次上传图片）..."));
-            const auto myRequest = requestId.load();
+            const auto myWindowId = windowId;
             auto blocks = geminiOcrBlocks;
             auto imagePixels = pixels;
+            auto targetLanguage = StarCapTranslationLanguage::prompt(targetLanguageIndex);
             std::thread([blocks = std::move(blocks), imagePixels = std::move(imagePixels),
                 width = imageW, height = imageH, apiKey = std::move(apiKey), model = std::move(model),
-                myRequest, preferImageTranslation]() mutable {
+                targetLanguage = std::move(targetLanguage), myWindowId, preferImageTranslation]() mutable {
                 GeminiClient::TranslationResult r;
-                if (!blocks.empty() && !preferImageTranslation) r = GeminiClient::translateOcrBlocks(blocks, apiKey, model);
-                else r = GeminiClient::translateImage(imagePixels, width, height, apiKey, model);
-                Ling::App::get()->dq.TryEnqueue([r = std::move(r), myRequest]() mutable {
-                    if (requestId.load() != myRequest || !activeWindow) return;
-                    activeWindow->setTranslationResult(std::move(r));
+                if (!blocks.empty() && !preferImageTranslation)
+                    r = GeminiClient::translateOcrBlocks(blocks, apiKey, model, targetLanguage);
+                else r = GeminiClient::translateImage(imagePixels, width, height, apiKey, model, targetLanguage);
+                Ling::App::get()->dq.TryEnqueue([r = std::move(r), myWindowId]() mutable {
+                    auto* target = findWindowById(myWindowId);
+                    if (!target) return;
+                    target->setTranslationResult(std::move(r));
                 });
             }).detach();
         }
@@ -890,6 +912,8 @@ namespace StarCapOcrV2
         }
 
     private:
+        unsigned long long windowId{ 0 };
+        int targetLanguageIndex{ 0 };
         std::vector<BYTE> pixels;
         int imageW{ 0 }, imageH{ 0 };
         Microsoft::WRL::ComPtr<ID2D1Bitmap1> imageBitmap;
@@ -918,37 +942,57 @@ namespace StarCapOcrV2
         bool showingTranslationText{ false }, showTranslatedImage{ false };
     };
 
-    inline bool containsPoint(POINT) { return false; }
-    inline bool hasWindow() { return activeWindow != nullptr; }
+    inline OcrResultWindow* findWindowById(unsigned long long id)
+    {
+        for (auto* window : windows) {
+            if (window && window->id() == id) return window;
+        }
+        return nullptr;
+    }
+
+    inline bool containsPoint(POINT point)
+    {
+        for (auto* window : windows) {
+            if (!window || !window->hwnd || !IsWindow(window->hwnd) || !IsWindowVisible(window->hwnd)) continue;
+            RECT rc{};
+            if (GetWindowRect(window->hwnd, &rc) && PtInRect(&rc, point)) return true;
+        }
+        return false;
+    }
+    inline bool hasWindow() { return !windows.empty(); }
 
     inline void showPixels(std::vector<BYTE> pixels, int width, int height, bool fromLongScreenshot = false)
     {
         if (pixels.empty() || width <= 0 || height <= 0) return;
         if (pixels.size() < (size_t)width * (size_t)height * 4) return;
-        const auto myRequest = ++requestId;
-        if (activeWindow) activeWindow->close();
-        activeWindow = new OcrResultWindow(pixels, width, height, fromLongScreenshot);
-        activeWindow->open();
+        auto* target = new OcrResultWindow(pixels, width, height, fromLongScreenshot);
+        windows.push_back(target);
+        activeWindow = target;
+        target->open();
+        target->cascade(windows.size());
+        const auto myWindowId = target->id();
 
         auto setting = Setting::get();
         auto apiKey = setting ? setting->getGeminiApiKey() : L"";
         auto model = setting ? setting->getGeminiModel() : L"gemini-3.7-flash";
         if (!apiKey.empty()) {
             std::thread([pixels = std::move(pixels), width, height, apiKey = std::move(apiKey),
-                model = std::move(model), myRequest]() mutable {
+                model = std::move(model), myWindowId]() mutable {
                 auto result = GeminiClient::recognizeImage(pixels, width, height, apiKey, model);
-                Ling::App::get()->dq.TryEnqueue([result = std::move(result), myRequest]() mutable {
-                    if (requestId.load() != myRequest || !activeWindow) return;
-                    activeWindow->setGeminiOcrResult(std::move(result));
+                Ling::App::get()->dq.TryEnqueue([result = std::move(result), myWindowId]() mutable {
+                    auto* window = findWindowById(myWindowId);
+                    if (!window) return;
+                    window->setGeminiOcrResult(std::move(result));
                 });
             }).detach();
         }
         else {
-            std::thread([pixels = std::move(pixels), width, height, myRequest]() mutable {
+            std::thread([pixels = std::move(pixels), width, height, myWindowId]() mutable {
                 auto result = recognizeWindows(std::move(pixels), width, height);
-                Ling::App::get()->dq.TryEnqueue([result = std::move(result), myRequest]() mutable {
-                    if (requestId.load() != myRequest || !activeWindow) return;
-                    activeWindow->setLocalOcrResult(std::move(result));
+                Ling::App::get()->dq.TryEnqueue([result = std::move(result), myWindowId]() mutable {
+                    auto* window = findWindowById(myWindowId);
+                    if (!window) return;
+                    window->setLocalOcrResult(std::move(result));
                 });
             }).detach();
         }
@@ -958,11 +1002,12 @@ namespace StarCapOcrV2
     {
         if (pixels.empty() || width <= 0 || height <= 0) return;
         if (pixels.size() < (size_t)width * (size_t)height * 4) return;
-        ++requestId;
-        if (activeWindow) activeWindow->close();
-        activeWindow = new OcrResultWindow(std::move(pixels), width, height, fromLongScreenshot);
-        activeWindow->open();
-        activeWindow->beginImageTranslation();
+        auto* target = new OcrResultWindow(std::move(pixels), width, height, fromLongScreenshot);
+        windows.push_back(target);
+        activeWindow = target;
+        target->open();
+        target->cascade(windows.size());
+        target->beginImageTranslation();
     }
     inline void show(WinCap* win)
     {

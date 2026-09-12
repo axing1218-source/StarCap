@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <vector>
 #include <cmath>
 #include "StarCapTranslationLanguage.h"
 
@@ -60,6 +61,7 @@ namespace StarCapOcrTranslationLanguageUI
         {
             install();
         }
+        StarCapOcrV2::OcrResultWindow* window() const { return owner; }
 
     private:
         void install()
@@ -90,7 +92,7 @@ namespace StarCapOcrTranslationLanguageUI
 
             targetBtn = row->makeChild<Ling::Button>();
             targetBtn->setText(StarCapTranslationLanguage::label(
-                StarCapTranslationLanguage::activeIndex()) + L"  ▾");
+                owner->getTargetLanguageIndex()) + L"  ▾");
             targetBtn->setColor(StarCapOcrV2::uiText());
             targetBtn->setHoverColor(StarCapOcrV2::uiText());
             targetBtn->setBg(StarCapOcrV2::uiSurface());
@@ -127,7 +129,7 @@ namespace StarCapOcrTranslationLanguageUI
             HMENU menu = CreatePopupMenu();
             if (!menu) return;
             constexpr UINT baseId = 5200;
-            const int current = StarCapTranslationLanguage::activeIndex();
+            const int current = owner->getTargetLanguageIndex();
             for (size_t i = 0; i < StarCapTranslationLanguage::options.size(); ++i) {
                 UINT flags = MF_STRING;
                 if ((int)i == current) flags |= MF_CHECKED;
@@ -151,7 +153,7 @@ namespace StarCapOcrTranslationLanguageUI
             const int selected = (int)(cmd - baseId);
             if (selected == current) return;
 
-            StarCapTranslationLanguage::sessionIndex = StarCapTranslationLanguage::clampIndex(selected);
+            owner->setTargetLanguageIndex(selected);
             targetBtn->setText(StarCapTranslationLanguage::label(selected) + L"  ▾");
 
             // A temporary target-language change never mutates the persistent default.
@@ -183,26 +185,23 @@ namespace StarCapOcrTranslationLanguageUI
         TranslationSurfaceOverlay* overlay{ nullptr };
     };
 
-    inline std::unique_ptr<Controller> controllerOwner;
-    inline StarCapOcrV2::OcrResultWindow* activeLanguageWindow{ nullptr };
+    inline std::vector<std::unique_ptr<Controller>> controllerOwners;
 
-    inline void detach(StarCapOcrV2::OcrResultWindow* window = nullptr)
+    inline void detach(StarCapOcrV2::OcrResultWindow* window)
     {
-        if (window && activeLanguageWindow != window) return;
-        controllerOwner.reset();
-        activeLanguageWindow = nullptr;
-        StarCapTranslationLanguage::clearSession();
+        for (auto it = controllerOwners.begin(); it != controllerOwners.end(); ) {
+            if ((*it)->window() == window) it = controllerOwners.erase(it);
+            else ++it;
+        }
     }
 
     inline void attach(StarCapOcrV2::OcrResultWindow* window)
     {
-        detach();
         if (!window) return;
-        StarCapTranslationLanguage::resetSessionToDefault();
-        controllerOwner = std::make_unique<Controller>(window);
-        activeLanguageWindow = window;
-        window->onDestroy.add([window]() {
-            if (activeLanguageWindow == window) detach(window);
-        });
+        for (const auto& controller : controllerOwners) {
+            if (controller->window() == window) return;
+        }
+        controllerOwners.push_back(std::make_unique<Controller>(window));
+        window->onDestroy.add([window]() { detach(window); });
     }
 }
