@@ -264,16 +264,32 @@ void WinPin::initEditor(int x, int y, int w, int h)
 
 void WinPin::initEditorFromData(int x, int y, int w, int h, std::vector<BYTE>& data)
 {
-	// OCR's "标注图片" should open the full annotation toolbar immediately,
-	// but unlike screenshot Mark it still behaves like a movable image window
-	// whenever no drawing tool is selected. Passing editorMode=false preserves
-	// the normal WinPin drag path while selected tools continue to receive mouse
-	// input for annotation.
-	ToolMain::queueEditorOpen();
-	auto ptr = new WinPin(x, y, w, h, &data, false);
-	std::unique_ptr<WinPin> winPin{ ptr };
-	ptr->createNativeWindow(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, WS_POPUP);
-	winPins.push_back(std::move(winPin));
+    ToolMain::queueEditorOpen();
+    auto ptr = new WinPin(x, y, w, h, &data, false);
+    std::unique_ptr<WinPin> winPin{ ptr };
+    ptr->createNativeWindow(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, WS_POPUP);
+
+    RECT sourceRect{ x, y, x + w, y + h };
+    MONITORINFO mi{ sizeof(MONITORINFO) };
+    HMONITOR mon = MonitorFromRect(&sourceRect, MONITOR_DEFAULTTONEAREST);
+    if (mon && GetMonitorInfo(mon, &mi)) {
+        const int workW = mi.rcWork.right - mi.rcWork.left;
+        const int workH = mi.rcWork.bottom - mi.rcWork.top;
+        const float fit = std::min(1.f, std::min(
+            (workW * 0.82f) / std::max(1, w),
+            (workH * 0.78f) / std::max(1, h)));
+        if (fit < 0.999f) {
+            ptr->scale = std::max(0.1f, fit);
+            ptr->applyWinSize();
+            const int drawW = static_cast<int>(std::lround(w * ptr->scale));
+            const int drawH = static_cast<int>(std::lround(h * ptr->scale));
+            ptr->setPosition(mi.rcWork.left + (workW - drawW) / 2,
+                mi.rcWork.top + (workH - drawH) / 2);
+            ptr->layoutTools();
+            ptr->refresh();
+        }
+    }
+    winPins.push_back(std::move(winPin));
 }
 
 void WinPin::initFromData(int x, int y, int w, int h, std::vector<BYTE>& data)
