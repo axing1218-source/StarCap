@@ -1,0 +1,310 @@
+name: Build long result crop and mark test
+
+on:
+  push:
+    branches:
+      - fix/long-result-crop-mark
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout StarCap
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply source fixes
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          import re
+
+          def read(path):
+              return Path(path).read_text(encoding='utf-8-sig')
+
+          def write(path, text):
+              Path(path).write_text(text, encoding='utf-8')
+
+          def replace_once(path, old, new, label):
+              text = read(path)
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one match, got {count}')
+              write(path, text.replace(old, new, 1))
+              print('patched', label)
+
+          def regex_once(path, pattern, repl, label):
+              text = read(path)
+              new_text, count = re.subn(pattern, repl, text, count=1, flags=re.S)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one regex match, got {count}')
+              write(path, new_text)
+              print('patched', label)
+
+          # CapLong public/private API for completed-result crop + annotation.
+          path = 'Src/Win/CapLong.h'
+          replace_once(path,
+              '''    bool ocr();\n    bool translate();\n\n    bool hasImage() const { return resultH > 0 && imgW > 0; }\n    void layoutTool();\n''',
+              '''    bool ocr();\n    bool translate();\n    bool mark();\n    bool enterResultAdjust();\n\n    bool hasImage() const { return resultH > 0 && imgW > 0; }\n    bool isResultEditing() const { return resultEditing; }\n    void layoutTool();\n''',
+              'CapLong public result editing API')
+          replace_once(path,
+              '''    bool isAutoScrolling() const { return autoScroll; }\n    bool canResizeSelection() const { return isCapturing && !isFinish && !autoScroll && acceptedFrames == 0; }\n''',
+              '''    bool isAutoScrolling() const { return autoScroll; }\n    bool canResizeSelection() const {\n        return resultEditing || (isCapturing && !isFinish && !autoScroll && acceptedFrames == 0);\n    }\n''',
+              'CapLong resize policy')
+          replace_once(path,
+              '''    void makeTool();\n    void makeImgPreview();\n    void paintImgPreview(ID2D1DeviceContext* ctx);\n''',
+              '''    void makeTool();\n    void makeImgPreview();\n    void makeResultEditPreview();\n    void paintImgPreview(ID2D1DeviceContext* ctx);\n    void clampResultEditRect();\n    bool applyResultCrop();\n''',
+              'CapLong result crop helpers')
+          replace_once(path,
+              '''    bool storageLimitReached{ false };\n    bool resizingSelection{ false };\n''',
+              '''    bool storageLimitReached{ false };\n    bool resizingSelection{ false };\n    bool resultEditing{ false };\n''',
+              'CapLong result editing state')
+          replace_once(path,
+              '''    D2D1_RECT_F stopTextRect{};\n    D2D1_POINT_2F stopTextPos{};\n''',
+              '''    D2D1_RECT_F stopTextRect{};\n    D2D1_POINT_2F stopTextPos{};\n    D2D1_RECT_F resultPreviewRect{};\n''',
+              'CapLong result preview rect')
+
+          # Long toolbar: add crop/adjust and image-mark entry points.
+          path = 'Src/Tool/ToolLong.h'
+          replace_once(path,
+              '''    std::vector<std::wstring> btnIds = { L"auto",L"ocr",L"translate",L"pin",L"close",L"save",L"clipboard" };\n    std::vector<std::wstring> btnCodes = { L"▶",L"\\ue67b",L"译",L"\\ue6a2",L"\\ue62d",L"\\ue608",L"\\ue6ad" };\n''',
+              '''    std::vector<std::wstring> btnIds = { L"auto",L"crop",L"mark",L"ocr",L"translate",L"pin",L"close",L"save",L"clipboard" };\n    std::vector<std::wstring> btnCodes = { L"▶",L"裁",L"\\ue97f",L"\\ue67b",L"译",L"\\ue6a2",L"\\ue62d",L"\\ue608",L"\\ue6ad" };\n''',
+              'ToolLong buttons')
+
+          path = 'Src/Tool/ToolLong.cpp'
+          replace_once(path,
+              '''        if (btnIds[i] == L"auto" || btnIds[i] == L"translate") {\n''',
+              '''        if (btnIds[i] == L"auto" || btnIds[i] == L"translate" || btnIds[i] == L"crop") {\n''',
+              'ToolLong text buttons')
+          replace_once(path,
+              '''    if (btn->id == L"ocr") {\n''',
+              '''    if (btn->id == L"crop") {\n        if (capLong) capLong->enterResultAdjust();\n        return;\n    }\n    if (btn->id == L"mark") {\n        if (!capLong || !capLong->mark()) return;\n        win->close();\n        return;\n    }\n    if (btn->id == L"ocr") {\n''',
+              'ToolLong crop and mark actions')
+
+          # Full-screen capture host: in result-edit mode draw the long-image preview first,
+          # then CutMask so its dimmer/border/resize handles stay visible above the preview.
+          path = 'Src/Win/WinCap.cpp'
+          regex_once(path,
+              r'''void WinCap::layout\(\)\n\{.*?\n\}\n\nBOOL WinCap::setCursor\(\)''',
+              '''void WinCap::layout()\n{\n    Ling::WinBase::layout();\n    if (!canvas) return;\n    auto ctx = canvas->startPaint();\n    if (!ctx) return;\n    ctx->Clear(0);\n    D2D1_RECT_F destRect = D2D1::RectF(0, 0, (float)w, (float)h);\n    if (!hideScreenImg) {\n        ctx->DrawBitmap(screenImg.Get(), destRect);\n    }\n    if (capLong && capLong->isResultEditing()) {\n        capLong->paint(ctx);\n        cutMask->paint(ctx);\n    }\n    else {\n        cutMask->paint(ctx);\n        if (capLong) capLong->paint(ctx);\n    }\n    paintPix(ctx);\n    canvas->finishPaint();\n}\n\nBOOL WinCap::setCursor()''',
+              'WinCap long-result paint order')
+
+          # Auto-fit oversized data-backed annotation windows (especially long screenshots).
+          path = 'Src/Win/WinPin.cpp'
+          regex_once(path,
+              r'''void WinPin::initEditorFromData\(int x, int y, int w, int h, std::vector<BYTE>& data\)\n\{.*?\n\}\n\nvoid WinPin::initFromData''',
+              '''void WinPin::initEditorFromData(int x, int y, int w, int h, std::vector<BYTE>& data)\n{\n    // Data-backed annotation (OCR and long screenshots) opens the full editor.\n    // Very tall long screenshots are fitted into the monitor work area on entry so\n    // the user can immediately see both the image and the annotation toolbar.\n    ToolMain::queueEditorOpen();\n    auto ptr = new WinPin(x, y, w, h, &data, false);\n    std::unique_ptr<WinPin> winPin{ ptr };\n    ptr->createNativeWindow(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, WS_POPUP);\n\n    RECT sourceRect{ x, y, x + w, y + h };\n    MONITORINFO mi{ sizeof(MONITORINFO) };\n    HMONITOR mon = MonitorFromRect(&sourceRect, MONITOR_DEFAULTTONEAREST);\n    if (mon && GetMonitorInfo(mon, &mi)) {\n        const int workW = mi.rcWork.right - mi.rcWork.left;\n        const int workH = mi.rcWork.bottom - mi.rcWork.top;\n        const float fit = std::min(1.f, std::min(\n            (workW * 0.82f) / std::max(1, w),\n            (workH * 0.78f) / std::max(1, h)));\n        if (fit < 0.999f) {\n            ptr->scale = std::max(0.1f, fit);\n            ptr->applyWinSize();\n            const int drawW = static_cast<int>(std::lround(w * ptr->scale));\n            const int drawH = static_cast<int>(std::lround(h * ptr->scale));\n            ptr->setPosition(mi.rcWork.left + (workW - drawW) / 2,\n                mi.rcWork.top + (workH - drawH) / 2);\n            ptr->layoutTools();\n            ptr->refresh();\n        }\n    }\n    winPins.push_back(std::move(winPin));\n}\n\nvoid WinPin::initFromData''',
+              'WinPin long editor auto-fit')
+
+          # CapLong completed-result crop flow.
+          path = 'Src/Win/CapLong.cpp'
+          text = read(path)
+          marker = 'void CapLong::makeImgPreview()\n'
+          if text.count(marker) != 1:
+              raise SystemExit('CapLong result helper insertion marker mismatch')
+          helpers = r'''bool CapLong::enterResultAdjust()
+{
+    if (!ensureMaterialized()) return false;
+    if (!isFinish) stopCap(false);
+    resultEditing = true;
+    win->hideScreenImg = true;
+    win->cutMask->hideLabel = false;
+    makeResultEditPreview();
+    if (!imgPreview) {
+        resultEditing = false;
+        return false;
+    }
+    win->cutMask->maskRect = resultPreviewRect;
+    layoutTool();
+    win->refresh();
+    StarCapDiag::append(std::format(L"[long-next] result-adjust-enter image={}x{} preview=[{:.0f},{:.0f},{:.0f},{:.0f}]",
+        imgW, resultH, resultPreviewRect.left, resultPreviewRect.top,
+        resultPreviewRect.right, resultPreviewRect.bottom));
+    return true;
+}
+
+void CapLong::makeResultEditPreview()
+{
+    imgPreview.Reset();
+    if (imgData.empty() || imgW <= 0 || resultH <= 0) return;
+
+    const float margin = std::max(18.f, 28.f * win->dpi);
+    const float maxW = std::max(120.f, win->w - margin * 2.f);
+    const float maxH = std::max(120.f, win->h - margin * 2.f - 54.f * win->dpi);
+    const float scale = std::min(1.f, std::min(maxW / imgW, maxH / resultH));
+    const int previewW = std::max(1, static_cast<int>(std::lround(imgW * scale)));
+    const int previewH = std::max(1, static_cast<int>(std::lround(resultH * scale)));
+
+    std::vector<BYTE> scaled(static_cast<size_t>(previewW) * previewH * 4);
+    for (int y = 0; y < previewH; ++y) {
+        const int srcY = std::min(resultH - 1,
+            static_cast<int>((static_cast<long long>(y) * resultH) / previewH));
+        for (int x = 0; x < previewW; ++x) {
+            const int srcX = std::min(imgW - 1,
+                static_cast<int>((static_cast<long long>(x) * imgW) / previewW));
+            const size_t si = (static_cast<size_t>(srcY) * imgW + srcX) * 4;
+            const size_t di = (static_cast<size_t>(y) * previewW + x) * 4;
+            scaled[di] = imgData[si];
+            scaled[di + 1] = imgData[si + 1];
+            scaled[di + 2] = imgData[si + 2];
+            scaled[di + 3] = imgData[si + 3];
+        }
+    }
+
+    D2D1_BITMAP_PROPERTIES1 props = {
+        .pixelFormat{D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)},
+        .dpiX{96.0f}, .dpiY{96.0f}, .bitmapOptions{D2D1_BITMAP_OPTIONS_NONE}
+    };
+    Ling::D2D::get()->deviceContext->CreateBitmap(D2D1::SizeU(previewW, previewH),
+        scaled.data(), previewW * 4, props, imgPreview.GetAddressOf());
+
+    const float left = std::max(margin, (win->w - previewW) * .5f);
+    const float top = std::max(margin, (win->h - previewH - 44.f * win->dpi) * .5f);
+    resultPreviewRect = D2D1::RectF(left, top, left + previewW, top + previewH);
+}
+
+void CapLong::clampResultEditRect()
+{
+    if (!resultEditing) return;
+    auto& r = win->cutMask->maskRect;
+    r.left = std::clamp(r.left, resultPreviewRect.left, resultPreviewRect.right - 4.f);
+    r.top = std::clamp(r.top, resultPreviewRect.top, resultPreviewRect.bottom - 4.f);
+    r.right = std::clamp(r.right, r.left + 4.f, resultPreviewRect.right);
+    r.bottom = std::clamp(r.bottom, r.top + 4.f, resultPreviewRect.bottom);
+}
+
+bool CapLong::applyResultCrop()
+{
+    if (!resultEditing) return true;
+    if (imgData.empty() || imgW <= 0 || resultH <= 0) return false;
+    clampResultEditRect();
+    const auto& r = win->cutMask->maskRect;
+    const float pw = resultPreviewRect.right - resultPreviewRect.left;
+    const float ph = resultPreviewRect.bottom - resultPreviewRect.top;
+    if (pw <= 0.f || ph <= 0.f) return false;
+
+    auto mapX = [&](float x) {
+        return (x - resultPreviewRect.left) * imgW / pw;
+    };
+    auto mapY = [&](float y) {
+        return (y - resultPreviewRect.top) * resultH / ph;
+    };
+    int left = std::clamp(static_cast<int>(std::floor(mapX(r.left))), 0, imgW - 1);
+    int top = std::clamp(static_cast<int>(std::floor(mapY(r.top))), 0, resultH - 1);
+    int right = std::clamp(static_cast<int>(std::ceil(mapX(r.right))), left + 1, imgW);
+    int bottom = std::clamp(static_cast<int>(std::ceil(mapY(r.bottom))), top + 1, resultH);
+
+    const int oldW = imgW, oldH = resultH;
+    const int newW = right - left, newH = bottom - top;
+    if (left != 0 || top != 0 || right != oldW || bottom != oldH) {
+        std::vector<BYTE> cropped(static_cast<size_t>(newW) * newH * 4);
+        const size_t srcRow = static_cast<size_t>(oldW) * 4;
+        const size_t dstRow = static_cast<size_t>(newW) * 4;
+        for (int y = 0; y < newH; ++y) {
+            const BYTE* src = imgData.data() + static_cast<size_t>(top + y) * srcRow + static_cast<size_t>(left) * 4;
+            CopyMemory(cropped.data() + static_cast<size_t>(y) * dstRow, src, dstRow);
+        }
+        imgData = std::move(cropped);
+        imgW = newW;
+        resultH = newH;
+        materializedDirty = false;
+        StarCapDiag::append(std::format(L"[long-next] result-crop {}x{} -> {}x{} rect=[{},{},{},{}]",
+            oldW, oldH, newW, newH, left, top, right, bottom));
+    }
+    resultEditing = false;
+    return true;
+}
+
+'''
+          write(path, text.replace(marker, helpers + marker, 1))
+          print('patched CapLong result helper methods')
+
+          # Result preview paints as a centered full-image view while editing; live capture keeps
+          # the existing bottom-following preview behavior.
+          regex_once(path,
+              r'''void CapLong::paintImgPreview\(ID2D1DeviceContext\* ctx\)\n\{.*?\n\}\n\nvoid CapLong::setState''',
+              '''void CapLong::paintImgPreview(ID2D1DeviceContext* ctx)\n{\n    if (!imgPreview) return;\n    if (resultEditing) {\n        ctx->DrawBitmap(imgPreview.Get(), resultPreviewRect);\n        return;\n    }\n    if (!tool) return;\n    auto bitmapSize = imgPreview->GetPixelSize();\n    float drawW = static_cast<float>(bitmapSize.width);\n    float drawH = static_cast<float>(bitmapSize.height);\n    POINT pos{ tool->x, tool->y - static_cast<int>(drawH) - static_cast<int>(2 * win->dpi) };\n    ScreenToClient(win->hwnd, &pos);\n    if (pos.y < 0) pos.y = 0;\n    D2D1_RECT_F destRect = D2D1::RectF(static_cast<float>(pos.x), static_cast<float>(pos.y), pos.x + drawW, pos.y + drawH);\n    ctx->DrawBitmap(imgPreview.Get(), destRect);\n}\n\nvoid CapLong::setState''',
+              'CapLong result preview paint')
+
+          # Mouse resize has two semantics: before capture it changes the source rectangle and
+          # restarts capture; in completed-result mode it changes only the crop rectangle.
+          regex_once(path,
+              r'''void CapLong::onDown\(POINT pos\)\n\{.*?\n\}\n\nvoid CapLong::onMove\(POINT pos\)\n\{.*?\n\}\n\nvoid CapLong::onUp\(POINT pos\)\n\{.*?\n\}\n\nvoid CapLong::scheduleFrameCapture''',
+              '''void CapLong::onDown(POINT pos)\n{\n    if (!canResizeSelection()) return;\n    auto hit = win->cutMask->hitTest(pos);\n    if (hit == MaskHit::None || hit == MaskHit::Inside) return;\n\n    resizingSelection = true;\n    win->isPress = true;\n    SetCapture(win->hwnd);\n    win->cutMask->startAdjust(pos);\n    if (tool) tool->hide();\n\n    if (resultEditing) {\n        StarCapDiag::append(std::format(L"[long-next] result-crop-resize-begin hit={}", static_cast<int>(hit)));\n        return;\n    }\n\n    win->killTimer(frameCaptureTimerId);\n    win->killTimer(autoScrollTimerId);\n    win->restoreWin();\n    StarCapDiag::append(std::format(L"[long-next] resize-begin hit={}", static_cast<int>(hit)));\n    win->refresh();\n}\n\nvoid CapLong::onMove(POINT pos)\n{\n    if (!resizingSelection) return;\n    win->cutMask->adjust(pos);\n    if (resultEditing) clampResultEditRect();\n}\n\nvoid CapLong::onUp(POINT pos)\n{\n    if (!resizingSelection) return;\n    win->cutMask->adjust(pos);\n    if (resultEditing) clampResultEditRect();\n    resizingSelection = false;\n    win->isPress = false;\n    if (GetCapture() == win->hwnd) ReleaseCapture();\n\n    if (resultEditing) {\n        if (tool) {\n            layoutTool();\n            tool->show();\n        }\n        StarCapDiag::append(L"[long-next] result-crop-resize-end");\n        win->refresh();\n        return;\n    }\n\n    // Re-open the interior to the target application before re-capturing the new first frame.\n    win->hollowWin();\n    restartForCurrentRect();\n    if (tool) {\n        layoutTool();\n        tool->show();\n    }\n    StarCapDiag::append(std::format(L"[long-next] resize-end rect={}x{}", imgW, imgH));\n    win->refresh();\n}\n\nvoid CapLong::scheduleFrameCapture''',
+              'CapLong result crop mouse handling')
+
+          # All completed-result actions consume the crop first. Mark opens the existing full
+          # WinPin annotation engine, so long screenshots gain the same drawing tools as normal shots.
+          regex_once(path,
+              r'''void CapLong::copyToClipboard\(\)\n\{.*?\n\}\n\nbool CapLong::saveToFile\(\)\n\{.*?\n\}\n\nbool CapLong::ocr\(\)\n\{.*?\n\}\n\nbool CapLong::translate\(\)\n\{.*?\n\}\n\nvoid CapLong::pin\(\)\n\{.*?\n\}\s*$''',
+              '''void CapLong::copyToClipboard()\n{\n    if (!ensureMaterialized()) return;\n    if (resultEditing && !applyResultCrop()) return;\n    if (!isFinish) stopCap(false);\n    Util::saveToClipboard(imgW, resultH, imgData.data());\n}\n\nbool CapLong::saveToFile()\n{\n    if (!ensureMaterialized()) return false;\n    if (resultEditing && !applyResultCrop()) return false;\n    if (!isFinish) stopCap(false);\n    auto path = Util::getSaveFilePath(win->hwnd);\n    if (path.empty()) return false;\n    return Util::saveToFile(path, imgW, resultH, imgData.data());\n}\n\nbool CapLong::ocr()\n{\n    if (!ensureMaterialized()) return false;\n    if (resultEditing && !applyResultCrop()) return false;\n    if (!isFinish) stopCap(false);\n    auto data = imgData;\n    StarCapOcr::showPixels(std::move(data), imgW, resultH, true);\n    return true;\n}\n\nbool CapLong::translate()\n{\n    if (!ensureMaterialized()) return false;\n    if (resultEditing && !applyResultCrop()) return false;\n    if (!isFinish) stopCap(false);\n    auto data = imgData;\n    StarCapOcr::showTranslationPixels(std::move(data), imgW, resultH, true);\n    return true;\n}\n\nbool CapLong::mark()\n{\n    if (!ensureMaterialized()) return false;\n    if (resultEditing && !applyResultCrop()) return false;\n    if (!isFinish) stopCap(false);\n    auto monitor = MonitorFromPoint({ win->x, win->y }, MONITOR_DEFAULTTONEAREST);\n    MONITORINFO mi{ sizeof(MONITORINFO) };\n    if (!GetMonitorInfo(monitor, &mi)) return false;\n    const int workW = mi.rcWork.right - mi.rcWork.left;\n    const int workH = mi.rcWork.bottom - mi.rcWork.top;\n    const int posX = mi.rcWork.left + (workW - std::min(imgW, workW)) / 2;\n    const int posY = mi.rcWork.top + (workH - std::min(resultH, workH)) / 2;\n    WinPin::initEditorFromData(posX, posY, imgW, resultH, imgData);\n    return true;\n}\n\nvoid CapLong::pin()\n{\n    if (!ensureMaterialized()) return;\n    if (resultEditing && !applyResultCrop()) return;\n    if (!isFinish) stopCap(false);\n    auto monitor = MonitorFromPoint({ 0, 0 }, MONITOR_DEFAULTTOPRIMARY);\n    MONITORINFO mi{ sizeof(MONITORINFO) };\n    GetMonitorInfo(monitor, &mi);\n    auto& workArea = mi.rcWork;\n    int screenW = workArea.right - workArea.left;\n    int screenH = workArea.bottom - workArea.top;\n    int posX = workArea.left + (screenW - imgW) / 2;\n    int posY = workArea.top + (screenH - std::min(resultH, screenH)) / 2;\n    WinPin::initFromData(posX, posY, imgW, resultH, imgData);\n}\n''',
+              'CapLong cropped output and mark action')
+
+          print('all source patches applied')
+          '@ | Set-Content patch_long_result.py -Encoding utf8
+          python patch_long_result.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Prepare pinned Ling dependency
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $lingCommit = 'b77448ec7e72b1b961d3c6f8f87502d8df72aa5f'
+          New-Item -ItemType Directory -Force D:\project | Out-Null
+          if (Test-Path D:\project\Ling) { Remove-Item -Recurse -Force D:\project\Ling }
+          git clone --no-checkout https://github.com/xland/Ling.git D:\project\Ling
+          git -C D:\project\Ling checkout --detach $lingCommit
+          $util = Get-Content D:\project\Ling\include\Util.h -Raw
+          $util = $util.Replace('constexpr auto gen = [](size_t i, size_t idx) {', 'constexpr auto gen = [](std::wstring_view chars, size_t i, size_t idx) {')
+          $util = $util.Replace('std::wstring{gen(I, I)...}', 'std::wstring{gen(chars, I, I)...}')
+          Set-Content D:\project\Ling\include\Util.h $util -Encoding utf8
+          $lingAppPath = 'D:\project\Ling\src\App.cpp'
+          $lingApp = Get-Content $lingAppPath -Raw
+          $oldTrayLine = 'tray->hIcon = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(1));'
+          $newTrayCode = 'tray->hIcon = (HICON)LoadImageW(GetModuleHandle(nullptr), MAKEINTRESOURCE(2), IMAGE_ICON,' + "`r`n" +
+            '            GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);' + "`r`n" +
+            '        if (!tray->hIcon) {' + "`r`n" +
+            '            tray->hIcon = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(1));' + "`r`n" +
+            '        }'
+          if (-not $lingApp.Contains($oldTrayLine)) { throw 'Ling tray patch marker missing.' }
+          Set-Content $lingAppPath ($lingApp.Replace($oldTrayLine, $newTrayCode)) -Encoding utf8
+
+      - name: Build Yoga and Ling
+        shell: pwsh
+        run: |
+          msbuild D:\project\Ling\yoga\yoga.vcxproj /m /p:Configuration=Release /p:Platform=x64 /p:SolutionDir=D:\project\Ling\
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          msbuild D:\project\Ling\Ling.vcxproj /m /p:Configuration=Release /p:Platform=x64 /p:SolutionDir=D:\project\Ling\
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build StarCap test executable
+        shell: pwsh
+        run: |
+          msbuild Src\StarCap.vcxproj /m /p:Configuration=Release /p:Platform=x64 /p:SolutionDir=${{ github.workspace }}\
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload test executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: StarCap-v0.10.10-long-result-crop-mark-test
+          path: x64/Release/StarCap.exe
+          if-no-files-found: error
+
+      - name: Commit verified source and remove temporary files
+        shell: pwsh
+        run: |
+          Remove-Item patch_long_result.py -ErrorAction SilentlyContinue
+          Remove-Item .github/workflows/build-long-result-crop-mark-test.yml -ErrorAction SilentlyContinue
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Src/Win/CapLong.h Src/Win/CapLong.cpp Src/Win/WinCap.cpp Src/Win/WinPin.cpp Src/Tool/ToolLong.h Src/Tool/ToolLong.cpp .github/workflows/build-long-result-crop-mark-test.yml
+          git commit -m "Add completed long screenshot crop and annotation editing"
+          git push origin HEAD:fix/long-result-crop-mark
