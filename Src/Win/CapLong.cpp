@@ -1159,7 +1159,11 @@ bool CapLong::ensureMaterialized()
 bool CapLong::enterResultAdjust()
 {
     if (!ensureMaterialized()) return false;
-    if (!isFinish) stopCap(false);
+    if (!isFinish) {
+        stopCap(false);
+        return resultEditing;
+    }
+    if (resultEditing) return true;
     resultEditing = true;
     win->hideScreenImg = true;
     win->cutMask->hideLabel = false;
@@ -1585,6 +1589,13 @@ void CapLong::resetAutoStep()
 
 void CapLong::pauseAuto(const wchar_t* reason, bool hardPause)
 {
+    // Exhausting all scroll strategies is the automatic equivalent of reaching
+    // the end: finalize and expose the completed result for direct trimming.
+    if (!hardPause && reason &&
+        (wcscmp(reason, L"no-progress") == 0 || wcscmp(reason, L"scroll-driver-unavailable") == 0)) {
+        stopCap(false);
+        return;
+    }
     if (!autoScroll && !hardPaused) return;
     autoScroll = false;
     resetAutoStep();
@@ -1623,7 +1634,9 @@ void CapLong::startAutoScroll()
 void CapLong::toggleAutoScroll()
 {
     if (!isCapturing || isFinish) return;
-    if (autoScroll) pauseAuto(L"user-pause", true);
+    // A second click means the user is done capturing. Finish the stitched result
+    // and immediately expose resize handles, matching the normal screenshot flow.
+    if (autoScroll) stopCap(false);
     else startAutoScroll();
 }
 
@@ -1678,6 +1691,10 @@ void CapLong::stopCap(bool showMessage)
     StarCapOcr::restoreAfterLongCapture();
     if (showMessage) makeStopText();
     win->restoreWin();
+    // Once a long screenshot is complete, immediately show the stitched image
+    // with the familiar eight resize handles. The existing Crop button remains
+    // as a manual-finish fallback for manual-scroll workflows.
+    enterResultAdjust();
     win->refresh();
 }
 
