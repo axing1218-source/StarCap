@@ -1,0 +1,169 @@
+name: Build long direct adjust and tooltip test
+
+on:
+  push:
+    branches:
+      - fix/long-result-crop-mark
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout StarCap
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply UX fixes
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          def read(path):
+              return Path(path).read_text(encoding='utf-8-sig')
+
+          def write(path, text):
+              Path(path).write_text(text, encoding='utf-8')
+
+          def replace_once(path, old, new, label):
+              text = read(path)
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one match, got {count}')
+              write(path, text.replace(old, new, 1))
+              print('patched', label)
+
+          # Long toolbar: add safe hover tips. The tooltip window itself is excluded
+          # from desktop capture so hovering cannot contaminate the stitched image.
+          path = 'Src/Tool/ToolLong.h'
+          replace_once(path,
+              '''class WinCap;\nclass CapLong;\n''',
+              '''class WinCap;\nclass CapLong;\nclass Tip;\n''',
+              'ToolLong Tip forward declaration')
+          replace_once(path,
+              '''    std::vector<std::wstring> btnCodes = { L"▶",L"裁",L"\\ue97f",L"\\ue67b",L"译",L"\\ue6a2",L"\\ue62d",L"\\ue608",L"\\ue6ad" };\n    Ling::Button* autoBtn{ nullptr };\n''',
+              '''    std::vector<std::wstring> btnCodes = { L"▶",L"裁",L"\\ue97f",L"\\ue67b",L"译",L"\\ue6a2",L"\\ue62d",L"\\ue608",L"\\ue6ad" };\n    std::vector<std::wstring> btnTips = { L"long.auto",L"long.adjust",L"cap.mark",L"cap.ocr",L"long.translate",L"tool.pin",L"tool.close",L"tool.save",L"tool.clipboard" };\n    std::unique_ptr<Tip> tip;\n    Ling::Button* autoBtn{ nullptr };\n''',
+              'ToolLong tooltip members')
+
+          path = 'Src/Tool/ToolLong.cpp'
+          replace_once(path,
+              '''#include "../Lang.h"\n#include "ToolLong.h"\n''',
+              '''#include "../Lang.h"\n#include "../Tip.h"\n#include "ToolLong.h"\n''',
+              'ToolLong Tip include')
+          replace_once(path,
+              '''void ToolLong::onCreated()\n{\n    body->setBg(0xFFFFFFFF);\n''',
+              '''void ToolLong::onCreated()\n{\n    tip = std::make_unique<Tip>(this);\n    // The tooltip is a separate top-level native window. Exclude it from screen\n    // capture so long screenshots can safely show the same hover help as normal capture.\n    tip->excludeFromCapture();\n    body->setBg(0xFFFFFFFF);\n''',
+              'ToolLong tooltip setup')
+          replace_once(path,
+              '''    // Long capture intentionally has no hover tooltips. The frame source is a\n    // desktop BitBlt, so auxiliary StarCap windows can become part of a stitched\n    // image when they overlap the selected region.\n    for (size_t i = 0; i < btnIds.size(); i++)\n''',
+              '''    for (size_t i = 0; i < btnIds.size(); i++)\n''',
+              'Remove no-tooltip policy')
+          replace_once(path,
+              '''        btn->onClick.add([this](Ling::Button* btn) { onClick(btn); });\n''',
+              '''        if (i < btnTips.size() && !btnTips[i].empty())\n            tip->bind(btn, Lang::get(btnTips[i]));\n        btn->onClick.add([this](Ling::Button* btn) { onClick(btn); });\n''',
+              'Bind ToolLong tooltips')
+          replace_once(path,
+              '''void ToolLong::onClick(Ling::Button* btn)\n{\n    if (btn->id == L"auto") {\n''',
+              '''void ToolLong::onClick(Ling::Button* btn)\n{\n    if (tip) tip->hide();\n    if (btn->id == L"auto") {\n''',
+              'Hide tooltip on click')
+
+          # Completed long capture should immediately enter the same resize-handle
+          # style result-adjustment state, rather than requiring an extra Crop click.
+          path = 'Src/Win/CapLong.cpp'
+          replace_once(path,
+              '''bool CapLong::enterResultAdjust()\n{\n    if (!ensureMaterialized()) return false;\n    if (!isFinish) stopCap(false);\n    resultEditing = true;\n''',
+              '''bool CapLong::enterResultAdjust()\n{\n    if (!ensureMaterialized()) return false;\n    if (!isFinish) {\n        stopCap(false);\n        return resultEditing;\n    }\n    if (resultEditing) return true;\n    resultEditing = true;\n''',
+              'Avoid duplicate result-adjust entry')
+          replace_once(path,
+              '''void CapLong::toggleAutoScroll()\n{\n    if (!isCapturing || isFinish) return;\n    if (autoScroll) pauseAuto(L"user-pause", true);\n    else startAutoScroll();\n}\n''',
+              '''void CapLong::toggleAutoScroll()\n{\n    if (!isCapturing || isFinish) return;\n    // A second click means the user is done capturing. Finish the stitched result\n    // and immediately expose resize handles, matching the normal screenshot flow.\n    if (autoScroll) stopCap(false);\n    else startAutoScroll();\n}\n''',
+              'Auto button finishes into result adjustment')
+          replace_once(path,
+              '''void CapLong::pauseAuto(const wchar_t* reason, bool hardPause)\n{\n    if (!autoScroll && !hardPaused) return;\n''',
+              '''void CapLong::pauseAuto(const wchar_t* reason, bool hardPause)\n{\n    // Exhausting all scroll strategies is the automatic equivalent of reaching\n    // the end: finalize and expose the completed result for direct trimming.\n    if (!hardPause && reason &&\n        (wcscmp(reason, L"no-progress") == 0 || wcscmp(reason, L"scroll-driver-unavailable") == 0)) {\n        stopCap(false);\n        return;\n    }\n    if (!autoScroll && !hardPaused) return;\n''',
+              'Automatic end enters result adjustment')
+          replace_once(path,
+              '''    if (showMessage) makeStopText();\n    win->restoreWin();\n    win->refresh();\n}\n''',
+              '''    if (showMessage) makeStopText();\n    win->restoreWin();\n    // Once a long screenshot is complete, immediately show the stitched image\n    // with the familiar eight resize handles. The existing Crop button remains\n    // as a manual-finish fallback for manual-scroll workflows.\n    enterResultAdjust();\n    win->refresh();\n}\n''',
+              'stopCap enters direct result adjustment')
+
+          # Localized hover text for all long-capture actions.
+          path = 'Lang/简体中文.zh-CN.json'
+          replace_once(path,
+              '''  "long": {"start":"开始","reachedBottom":"已触底，截图停止","tooLong":"图像过长，截图停止"},''',
+              '''  "long": {"start":"开始","auto":"开始 / 完成长截图","adjust":"调整截图范围","translate":"翻译","reachedBottom":"已触底，截图停止","tooLong":"图像过长，截图停止"},''',
+              'Chinese long tooltips')
+          path = 'Lang/English.en-US.json'
+          replace_once(path,
+              '''  "long": {"start":"Start","reachedBottom":"Reached the bottom, capture stopped","tooLong":"Image too long, capture stopped"},''',
+              '''  "long": {"start":"Start","auto":"Start / Finish Scrolling Screenshot","adjust":"Adjust Capture Area","translate":"Translate","reachedBottom":"Reached the bottom, capture stopped","tooLong":"Image too long, capture stopped"},''',
+              'English long tooltips')
+          '@ | Set-Content apply_long_ux_fix.py -Encoding utf8
+          python apply_long_ux_fix.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Prepare pinned Ling dependency
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $lingCommit = 'b77448ec7e72b1b961d3c6f8f87502d8df72aa5f'
+          New-Item -ItemType Directory -Force D:\project | Out-Null
+          if (Test-Path D:\project\Ling) { Remove-Item -Recurse -Force D:\project\Ling }
+          git clone --no-checkout https://github.com/xland/Ling.git D:\project\Ling
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C D:\project\Ling checkout --detach $lingCommit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $util = Get-Content D:\project\Ling\include\Util.h -Raw
+          $util = $util.Replace('constexpr auto gen = [](size_t i, size_t idx) {', 'constexpr auto gen = [](std::wstring_view chars, size_t i, size_t idx) {')
+          $util = $util.Replace('std::wstring{gen(I, I)...}', 'std::wstring{gen(chars, I, I)...}')
+          Set-Content D:\project\Ling\include\Util.h $util -Encoding utf8
+          $lingAppPath = 'D:\project\Ling\src\App.cpp'
+          $lingApp = Get-Content $lingAppPath -Raw
+          $oldTrayLine = 'tray->hIcon = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(1));'
+          $newTrayCode = 'tray->hIcon = (HICON)LoadImageW(GetModuleHandle(nullptr), MAKEINTRESOURCE(2), IMAGE_ICON,' + "`r`n" +
+            '            GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);' + "`r`n" +
+            '        if (!tray->hIcon) {' + "`r`n" +
+            '            tray->hIcon = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(1));' + "`r`n" +
+            '        }'
+          if ($lingApp.Contains($oldTrayLine)) {
+            $lingApp = $lingApp.Replace($oldTrayLine, $newTrayCode)
+            Set-Content $lingAppPath $lingApp -Encoding utf8
+          }
+
+      - name: Build Yoga and Ling
+        shell: pwsh
+        run: |
+          msbuild D:\project\Ling\yoga\yoga.vcxproj /m /p:Configuration=Release /p:Platform=x64 /p:SolutionDir=D:\project\Ling\
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          msbuild D:\project\Ling\Ling.vcxproj /m /p:Configuration=Release /p:Platform=x64 /p:SolutionDir=D:\project\Ling\
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build StarCap test executable
+        shell: pwsh
+        run: |
+          msbuild Src\StarCap.vcxproj /m /p:Configuration=Release /p:Platform=x64 /p:SolutionDir=${{ github.workspace }}\
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload test executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: StarCap-v0.10.10-long-direct-adjust-tooltip-test
+          path: x64/Release/StarCap.exe
+
+      - name: Commit verified source and remove temporary workflow
+        shell: pwsh
+        run: |
+          Remove-Item apply_long_ux_fix.py -Force
+          Remove-Item .github/workflows/build-long-direct-adjust-tooltip-test.yml -Force
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Src/Tool/ToolLong.h Src/Tool/ToolLong.cpp Src/Win/CapLong.cpp Lang/简体中文.zh-CN.json Lang/English.en-US.json .github/workflows/build-long-direct-adjust-tooltip-test.yml
+          git commit -m "Make completed long screenshots directly adjustable and add tooltips"
+          git push origin HEAD:fix/long-result-crop-mark
