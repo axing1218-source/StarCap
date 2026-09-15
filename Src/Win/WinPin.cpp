@@ -148,6 +148,102 @@ POINT WinPin::toImgPos(const POINT& pos) const
 	return POINT{ static_cast<LONG>(std::lround(pos.x / scale)), static_cast<LONG>(std::lround(pos.y / scale)) };
 }
 
+void WinPin::ensureCropRect()
+{
+	if (cropInitialized) return;
+	resetCrop();
+}
+
+void WinPin::resetCrop()
+{
+	auto sz = getImgSize();
+	if (sz.width == 0 || sz.height == 0) return;
+	cropRect = D2D1::RectF(0.f, 0.f, static_cast<float>(sz.width), static_cast<float>(sz.height));
+	cropStart = cropRect;
+	cropInitialized = true;
+	cropHit = CropHit::None;
+	refresh();
+}
+
+WinPin::CropHit WinPin::hitCrop(POINT p) const
+{
+	if (!cropInitialized) return CropHit::None;
+	const float tol = std::max(4.f, 8.f / std::max(0.1f, scale));
+	const bool l = std::abs(p.x - cropRect.left) <= tol;
+	const bool r = std::abs(p.x - cropRect.right) <= tol;
+	const bool t = std::abs(p.y - cropRect.top) <= tol;
+	const bool b = std::abs(p.y - cropRect.bottom) <= tol;
+	const bool inX = p.x >= cropRect.left - tol && p.x <= cropRect.right + tol;
+	const bool inY = p.y >= cropRect.top - tol && p.y <= cropRect.bottom + tol;
+	if (l && t) return CropHit::TopLeft;
+	if (r && t) return CropHit::TopRight;
+	if (l && b) return CropHit::BottomLeft;
+	if (r && b) return CropHit::BottomRight;
+	if (l && inY) return CropHit::Left;
+	if (r && inY) return CropHit::Right;
+	if (t && inX) return CropHit::Top;
+	if (b && inX) return CropHit::Bottom;
+	if (p.x > cropRect.left && p.x < cropRect.right && p.y > cropRect.top && p.y < cropRect.bottom) return CropHit::Inside;
+	return CropHit::None;
+}
+
+void WinPin::updateCrop(POINT p)
+{
+	if (!cropInitialized || cropHit == CropHit::None) return;
+	auto sz = getImgSize();
+	const float maxX = static_cast<float>(sz.width);
+	const float maxY = static_cast<float>(sz.height);
+	const float minSize = 8.f;
+	const float dx = static_cast<float>(p.x - cropPress.x);
+	const float dy = static_cast<float>(p.y - cropPress.y);
+	auto r = cropStart;
+
+	if (cropHit == CropHit::Inside) {
+		const float rw = r.right - r.left, rh = r.bottom - r.top;
+		float nl = std::clamp(r.left + dx, 0.f, std::max(0.f, maxX - rw));
+		float nt = std::clamp(r.top + dy, 0.f, std::max(0.f, maxY - rh));
+		cropRect = D2D1::RectF(nl, nt, nl + rw, nt + rh);
+		refresh();
+		return;
+	}
+
+	if (cropHit == CropHit::Left || cropHit == CropHit::TopLeft || cropHit == CropHit::BottomLeft)
+		r.left = std::clamp(r.left + dx, 0.f, r.right - minSize);
+	if (cropHit == CropHit::Right || cropHit == CropHit::TopRight || cropHit == CropHit::BottomRight)
+		r.right = std::clamp(r.right + dx, r.left + minSize, maxX);
+	if (cropHit == CropHit::Top || cropHit == CropHit::TopLeft || cropHit == CropHit::TopRight)
+		r.top = std::clamp(r.top + dy, 0.f, r.bottom - minSize);
+	if (cropHit == CropHit::Bottom || cropHit == CropHit::BottomLeft || cropHit == CropHit::BottomRight)
+		r.bottom = std::clamp(r.bottom + dy, r.top + minSize, maxY);
+	cropRect = r;
+	refresh();
+}
+
+void WinPin::paintCrop(ID2D1DeviceContext* ctx)
+{
+	if (!editorMode || !toolMain || toolMain->curId != L"crop" || !cropInitialized || !cropShadeBrush || !cropBorderBrush) return;
+	D2D1_RECT_F r{ cropRect.left * scale, cropRect.top * scale, cropRect.right * scale, cropRect.bottom * scale };
+	r.left = std::clamp(r.left, 0.f, w); r.right = std::clamp(r.right, 0.f, w);
+	r.top = std::clamp(r.top, 0.f, h); r.bottom = std::clamp(r.bottom, 0.f, h);
+	ctx->FillRectangle(D2D1::RectF(0.f, 0.f, w, r.top), cropShadeBrush.Get());
+	ctx->FillRectangle(D2D1::RectF(0.f, r.bottom, w, h), cropShadeBrush.Get());
+	ctx->FillRectangle(D2D1::RectF(0.f, r.top, r.left, r.bottom), cropShadeBrush.Get());
+	ctx->FillRectangle(D2D1::RectF(r.right, r.top, w, r.bottom), cropShadeBrush.Get());
+	ctx->DrawRectangle(r, cropBorderBrush.Get(), std::max(1.f, 1.5f * dpi));
+
+	const float hs = std::max(3.f, 4.f * dpi);
+	const D2D1_POINT_2F pts[] = {
+		{r.left,r.top},{(r.left+r.right)*.5f,r.top},{r.right,r.top},
+		{r.left,(r.top+r.bottom)*.5f},{r.right,(r.top+r.bottom)*.5f},
+		{r.left,r.bottom},{(r.left+r.right)*.5f,r.bottom},{r.right,r.bottom}
+	};
+	for (auto pnt : pts) {
+		auto box = D2D1::RectF(pnt.x-hs, pnt.y-hs, pnt.x+hs, pnt.y+hs);
+		ctx->FillRectangle(box, cropHandleBrush.Get());
+		ctx->DrawRectangle(box, cropBorderBrush.Get(), 1.f);
+	}
+}
+
 void WinPin::applyScale(float newScale, POINT anchor)
 {
 	auto sz = getImgSize();
@@ -292,6 +388,36 @@ void WinPin::initEditorFromData(int x, int y, int w, int h, std::vector<BYTE>& d
     winPins.push_back(std::move(winPin));
 }
 
+void WinPin::initLongEditorFromData(int x, int y, int w, int h, std::vector<BYTE>& data)
+{
+    ToolMain::queueEditorOpen();
+    auto ptr = new WinPin(x, y, w, h, &data, true);
+    std::unique_ptr<WinPin> winPin{ ptr };
+    ptr->createNativeWindow(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, WS_POPUP);
+
+    RECT sourceRect{ x, y, x + w, y + h };
+    MONITORINFO mi{ sizeof(MONITORINFO) };
+    HMONITOR mon = MonitorFromRect(&sourceRect, MONITOR_DEFAULTTONEAREST);
+    if (mon && GetMonitorInfo(mon, &mi)) {
+        const int workW = mi.rcWork.right - mi.rcWork.left;
+        const int workH = mi.rcWork.bottom - mi.rcWork.top;
+        const float fit = std::min(1.f, std::min(
+            (workW * 0.82f) / std::max(1, w),
+            (workH * 0.78f) / std::max(1, h)));
+        if (fit < 0.999f) {
+            ptr->scale = std::max(0.1f, fit);
+            ptr->applyWinSize();
+            const int drawW = static_cast<int>(std::lround(w * ptr->scale));
+            const int drawH = static_cast<int>(std::lround(h * ptr->scale));
+            ptr->setPosition(mi.rcWork.left + (workW - drawW) / 2,
+                mi.rcWork.top + (workH - drawH) / 2);
+            ptr->layoutTools();
+            ptr->refresh();
+        }
+    }
+    winPins.push_back(std::move(winPin));
+}
+
 void WinPin::initFromData(int x, int y, int w, int h, std::vector<BYTE>& data)
 {
 	auto ptr = new WinPin(x, y, w, h, &data);
@@ -311,6 +437,9 @@ void WinPin::onCreated()
     d2d->deviceContext->CreateSolidColorBrush(D2D1::ColorF(0x1677ff), borderBrush.GetAddressOf());
     d2d->deviceContext->CreateSolidColorBrush(D2D1::ColorF(0x000000, 0.46f), brushTipBg.GetAddressOf());
     d2d->deviceContext->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), brushTipText.GetAddressOf());
+    d2d->deviceContext->CreateSolidColorBrush(D2D1::ColorF(0x000000, 0.42f), cropShadeBrush.GetAddressOf());
+    d2d->deviceContext->CreateSolidColorBrush(D2D1::ColorF(0x1677ff), cropBorderBrush.GetAddressOf());
+    d2d->deviceContext->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), cropHandleBrush.GetAddressOf());
     show();
 }
 
@@ -339,6 +468,7 @@ void WinPin::layout()
 	// 蓝边框和倍数提示属于窗口装饰，不跟着图缩放：变换收回来，按窗口坐标画。
 	// 边框也因此从"底图矩形"改成"窗口矩形"，任何倍数下都是 2*dpi 粗
 	ctx->SetTransform(D2D1::Matrix3x2F::Identity());
+	paintCrop(ctx);
 	ctx->DrawRectangle(D2D1::RectF(0.f, 0.f, w, h), borderBrush.Get(), 2*dpi);
 	paintScaleTip(ctx);
     canvas->finishPaint();
@@ -365,6 +495,18 @@ void WinPin::onDown(POINT pos, BOOL isRight)
 	// 这里不能抢先 SetCapture / 置 isMouseDown，否则拖选文本会被当成拖 shape。
 	if (editingText && textBox && textBox->isPosIn(pos)) return;
 	if (isRight) return;
+
+	if (editorMode && toolMain && toolMain->curId == L"crop") {
+		ensureCropRect();
+		auto imgPos = toImgPos(pos);
+		cropHit = hitCrop(imgPos);
+		if (cropHit == CropHit::None) return;
+		cropPress = imgPos;
+		cropStart = cropRect;
+		isMouseDown = true;
+		SetCapture(hwnd);
+		return;
+	}
 
 	// 双击判定得自己做，做法同 WinCap::onDown：Ling 的窗口类没带 CS_DBLCLKS，
 	// WM_LBUTTONDBLCLK 根本不会来，只能拿系统的双击间隔和双击判定框自己认。
@@ -421,6 +563,10 @@ void WinPin::onDown(POINT pos, BOOL isRight)
 
 void WinPin::onMove(POINT pos)
 {
+	if (editorMode && toolMain && toolMain->curId == L"crop") {
+		if (isMouseDown && cropHit != CropHit::None) updateCrop(toImgPos(pos));
+		return;
+	}
 	// 同 onDown：文本框里的移动归 TextBox（拖选、滚动条 hover），不参与 shape 的 hover 判定
 	if (editingText && textBox && textBox->isPosIn(pos)) return;
 	// 拖窗口用的是窗口坐标（pressPos 也是），只有交给 shape 的才换算成底图像素
@@ -470,6 +616,14 @@ void WinPin::onUp(POINT pos, BOOL isRight)
 		// The pinned image owns its context-menu gesture. This remains reliable
 		// when ToolMain is hidden and never changes toolbar visibility by itself.
 		if (toolMain) toolMain->showPinContextMenu();
+		return;
+	}
+	if (editorMode && toolMain && toolMain->curId == L"crop") {
+		if (isMouseDown && cropHit != CropHit::None) updateCrop(toImgPos(pos));
+		isMouseDown = false;
+		cropHit = CropHit::None;
+		if (GetCapture() == hwnd) ReleaseCapture();
+		refresh();
 		return;
 	}
 	isMouseDown = false;
@@ -681,6 +835,24 @@ bool WinPin::getImagePixels(std::vector<BYTE>& pixels, D2D1_SIZE_U& size)
 			rowBytes);
 	}
 	cpuBmp->Unmap();
+
+	if (cropInitialized) {
+		int left = std::clamp(static_cast<int>(std::floor(cropRect.left)), 0, static_cast<int>(size.width) - 1);
+		int top = std::clamp(static_cast<int>(std::floor(cropRect.top)), 0, static_cast<int>(size.height) - 1);
+		int right = std::clamp(static_cast<int>(std::ceil(cropRect.right)), left + 1, static_cast<int>(size.width));
+		int bottom = std::clamp(static_cast<int>(std::ceil(cropRect.bottom)), top + 1, static_cast<int>(size.height));
+		if (left != 0 || top != 0 || right != static_cast<int>(size.width) || bottom != static_cast<int>(size.height)) {
+			const UINT32 outW = static_cast<UINT32>(right - left);
+			const UINT32 outH = static_cast<UINT32>(bottom - top);
+			std::vector<BYTE> cropped(static_cast<size_t>(outW) * outH * 4);
+			for (UINT32 row = 0; row < outH; ++row) {
+				const BYTE* src = pixels.data() + (static_cast<size_t>(top) + row) * rowBytes + static_cast<size_t>(left) * 4;
+				CopyMemory(cropped.data() + static_cast<size_t>(row) * outW * 4, src, static_cast<size_t>(outW) * 4);
+			}
+			pixels = std::move(cropped);
+			size = D2D1::SizeU(outW, outH);
+		}
+	}
 	return true;
 }
 
@@ -692,6 +864,20 @@ BOOL WinPin::setCursor()
 		bool handled{ false };
 		onCursor(&handled);
 		if (handled) return TRUE;
+	}
+	if (editorMode && toolMain->curId == L"crop") {
+		ensureCropRect();
+		POINT pos{}; GetCursorPos(&pos); ScreenToClient(hwnd, &pos);
+		auto hit = hitCrop(toImgPos(pos));
+		switch (hit) {
+		case CropHit::TopLeft: case CropHit::BottomRight: SetCursor(LoadCursor(nullptr, IDC_SIZENWSE)); break;
+		case CropHit::TopRight: case CropHit::BottomLeft: SetCursor(LoadCursor(nullptr, IDC_SIZENESW)); break;
+		case CropHit::Top: case CropHit::Bottom: SetCursor(LoadCursor(nullptr, IDC_SIZENS)); break;
+		case CropHit::Left: case CropHit::Right: SetCursor(LoadCursor(nullptr, IDC_SIZEWE)); break;
+		case CropHit::Inside: SetCursor(LoadCursor(nullptr, IDC_SIZEALL)); break;
+		default: SetCursor(LoadCursor(nullptr, IDC_ARROW)); break;
+		}
+		return TRUE;
 	}
 	if (toolMain->curId == L"") {
 		SetCursor(LoadCursor(nullptr, editorMode ? IDC_ARROW : IDC_SIZEALL));

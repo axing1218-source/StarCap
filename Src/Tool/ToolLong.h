@@ -27,9 +27,9 @@ private:
     CapLong* capLong;
     bool dpiChanged{ false };
     static constexpr float btnSize{ 32.f };
-    std::vector<std::wstring> btnIds = { L"auto",L"done",L"mark",L"ocr",L"translate",L"pin",L"close",L"save",L"clipboard" };
-    std::vector<std::wstring> btnCodes = { L"▶",L"✓",L"\ue97f",L"\ue67b",L"译",L"\ue6a2",L"\ue62d",L"\ue608",L"\ue6ad" };
-    std::vector<std::wstring> btnTips = { L"long.auto",L"long.done",L"cap.mark",L"cap.ocr",L"long.translate",L"tool.pin",L"tool.close",L"tool.save",L"tool.clipboard" };
+    std::vector<std::wstring> btnIds = { L"auto",L"mark",L"ocr",L"translate",L"pin",L"close",L"save",L"clipboard" };
+    std::vector<std::wstring> btnCodes = { L"▶",L"\ue97f",L"\ue67b",L"译",L"\ue6a2",L"\ue62d",L"\ue608",L"\ue6ad" };
+    std::vector<std::wstring> btnTips = { L"long.auto",L"cap.mark",L"cap.ocr",L"long.translate",L"tool.pin",L"tool.close",L"tool.save",L"tool.clipboard" };
     std::unique_ptr<Tip> tip;
     Ling::Button* autoBtn{ nullptr };
 };

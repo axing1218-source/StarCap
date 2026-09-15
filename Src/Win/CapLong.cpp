@@ -1589,13 +1589,9 @@ void CapLong::resetAutoStep()
 
 void CapLong::pauseAuto(const wchar_t* reason, bool hardPause)
 {
-    // Exhausting all scroll strategies is the automatic equivalent of reaching
-    // the end: finalize and expose the completed result for direct trimming.
-    if (!hardPause && reason &&
-        (wcscmp(reason, L"no-progress") == 0 || wcscmp(reason, L"scroll-driver-unavailable") == 0)) {
-        stopCap(false);
-        return;
-    }
+    // Auto-scroll is only an aid. Even when it cannot advance further, keep the
+    // stitched session alive so the user can scroll manually, resume Auto, press
+    // Enter to copy, or choose a terminal toolbar action.
     if (!autoScroll && !hardPaused) return;
     autoScroll = false;
     resetAutoStep();
@@ -1634,9 +1630,9 @@ void CapLong::startAutoScroll()
 void CapLong::toggleAutoScroll()
 {
     if (!isCapturing || isFinish) return;
-    // Auto-scroll is only a capture aid. Toggling it pauses/resumes automatic
-    // scrolling; the separate Done action finalizes the long screenshot.
-    if (autoScroll) pauseAuto(L"user-pause", true);
+    // Auto-scroll is only a capture aid. Pausing it leaves frame capture
+    // running so manual wheel scrolling can continue the same stitched session.
+    if (autoScroll) pauseAuto(L"user-pause", false);
     else startAutoScroll();
 }
 
@@ -1691,10 +1687,8 @@ void CapLong::stopCap(bool showMessage)
     StarCapOcr::restoreAfterLongCapture();
     if (showMessage) makeStopText();
     win->restoreWin();
-    // Once a long screenshot is complete, immediately show the stitched image
-    // with the familiar eight resize handles. Manual and automatic scrolling
-    // share the same Done -> adjust -> mark/save/copy result flow.
-    enterResultAdjust();
+    // No standalone "Done" stage: the action that ends capture (Enter/copy,
+    // mark, save, OCR, translate or pin) decides what happens next.
     win->refresh();
 }
 
@@ -1767,7 +1761,7 @@ bool CapLong::mark()
     const int workH = mi.rcWork.bottom - mi.rcWork.top;
     const int posX = mi.rcWork.left + (workW - std::min(imgW, workW)) / 2;
     const int posY = mi.rcWork.top + (workH - std::min(resultH, workH)) / 2;
-    WinPin::initEditorFromData(posX, posY, imgW, resultH, imgData);
+    WinPin::initLongEditorFromData(posX, posY, imgW, resultH, imgData);
     return true;
 }
 

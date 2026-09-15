@@ -21,6 +21,8 @@ public:
 	// It opens the full toolbar immediately, but remains movable whenever no
 	// drawing tool is selected.
 	static void initEditorFromData(int x, int y, int w, int h, std::vector<BYTE>& data);
+	// Long-screenshot editor: fixed canvas + full annotation toolbar + crop tool.
+	static void initLongEditorFromData(int x, int y, int w, int h, std::vector<BYTE>& data);
 	// 底图不来自 WinCap 的截屏，而是外部给的一块 BGRA、top-down、行紧凑（步长 = w*4）像素。
 	// 滚动截图（WinLong）拼出来的长图走这条路进贴图窗口。
 	static void initFromData(int x, int y, int w, int h, std::vector<BYTE>& data);
@@ -60,6 +62,7 @@ public:
 	// 贴图窗口的底图。ShapeMosaic 要读它算马赛克块，ShapeEraser 拿它当"擦回原样"的画刷
 	Microsoft::WRL::ComPtr<ID2D1Bitmap1> screenImg;
 private:
+	enum class CropHit { None, Inside, Left, Right, Top, Bottom, TopLeft, TopRight, BottomLeft, BottomRight };
 	WinPin(int x, int y, int w, int h, const std::vector<BYTE>* data = nullptr, bool editorMode = false);
 	void onCreated() override;
 	void layout() override;
@@ -89,6 +92,11 @@ private:
 	// 缩放后窗口跟着改大小，并反向挪一下窗口位置，让 anchor 底下的那块图还停在原处
 	void applyScale(float newScale, POINT anchor);
 	void paintScaleTip(ID2D1DeviceContext* ctx);
+	void ensureCropRect();
+	void resetCrop();
+	CropHit hitCrop(POINT imgPos) const;
+	void updateCrop(POINT imgPos);
+	void paintCrop(ID2D1DeviceContext* ctx);
 private:
 	// 整个窗口内容都画在这块画布上，走 swap chain 后端：贴图窗口拖动 shape 时每帧重绘，
 	// 单缓冲的合成表面会被采样到"擦干净→逐个重画"的中间态，表现为 shape 和边框整帧闪掉。
@@ -105,6 +113,12 @@ private:
 	// true only when opened from the screenshot "图像标记" action. In this
 	// mode the capture is an editor canvas, not a movable desktop pin.
 	bool editorMode{ false };
+	bool cropInitialized{ false };
+	CropHit cropHit{ CropHit::None };
+	D2D1_RECT_F cropRect{};
+	D2D1_RECT_F cropStart{};
+	POINT cropPress{ 0,0 };
+	Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> cropShadeBrush, cropBorderBrush, cropHandleBrush;
 	// onDpiChanged 与 onSizeChanged 之间的接力标记，见构造函数里的注释
 	bool dpiChanged{ false };
 	POINT pressPos{ 0,0 };

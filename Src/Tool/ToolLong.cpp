@@ -48,7 +48,7 @@ void ToolLong::onCreated()
         btn->setFlexGrow(1.f);
         btn->setHoverBg(0xF2F2F2ff);
 
-        if (btnIds[i] == L"auto" || btnIds[i] == L"translate" || btnIds[i] == L"done") {
+        if (btnIds[i] == L"auto" || btnIds[i] == L"translate") {
             btn->setFontFamily(L"Microsoft YaHei");
             btn->setFontSize(12.f);
             if (btnIds[i] == L"auto") autoBtn = btn;
@@ -82,10 +82,6 @@ void ToolLong::onClick(Ling::Button* btn)
     if (tip) tip->hide();
     if (btn->id == L"auto") {
         if (capLong) capLong->toggleAutoScroll();
-        return;
-    }
-    if (btn->id == L"done") {
-        if (capLong) capLong->enterResultAdjust();
         return;
     }
     if (btn->id == L"mark") {
