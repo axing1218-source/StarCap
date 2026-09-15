@@ -1634,9 +1634,9 @@ void CapLong::startAutoScroll()
 void CapLong::toggleAutoScroll()
 {
     if (!isCapturing || isFinish) return;
-    // A second click means the user is done capturing. Finish the stitched result
-    // and immediately expose resize handles, matching the normal screenshot flow.
-    if (autoScroll) stopCap(false);
+    // Auto-scroll is only a capture aid. Toggling it pauses/resumes automatic
+    // scrolling; the separate Done action finalizes the long screenshot.
+    if (autoScroll) pauseAuto(L"user-pause", true);
     else startAutoScroll();
 }
 
@@ -1692,8 +1692,8 @@ void CapLong::stopCap(bool showMessage)
     if (showMessage) makeStopText();
     win->restoreWin();
     // Once a long screenshot is complete, immediately show the stitched image
-    // with the familiar eight resize handles. The existing Crop button remains
-    // as a manual-finish fallback for manual-scroll workflows.
+    // with the familiar eight resize handles. Manual and automatic scrolling
+    // share the same Done -> adjust -> mark/save/copy result flow.
     enterResultAdjust();
     win->refresh();
 }
