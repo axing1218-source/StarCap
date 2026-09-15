@@ -21,7 +21,7 @@ public:
 	// It opens the full toolbar immediately, but remains movable whenever no
 	// drawing tool is selected.
 	static void initEditorFromData(int x, int y, int w, int h, std::vector<BYTE>& data);
-	// Long-screenshot editor: fixed canvas + full annotation toolbar + crop tool.
+	// Long-screenshot editor: fixed canvas + full annotation toolbar + persistent trim frame.
 	static void initLongEditorFromData(int x, int y, int w, int h, std::vector<BYTE>& data);
 	// 底图不来自 WinCap 的截屏，而是外部给的一块 BGRA、top-down、行紧凑（步长 = w*4）像素。
 	// 滚动截图（WinLong）拼出来的长图走这条路进贴图窗口。

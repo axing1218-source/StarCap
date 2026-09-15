@@ -30,10 +30,6 @@ ToolMain::ToolMain(WinPin* win) : Ling::WinBase(), win(win)
 	dpi = win->dpi;
 	x = win->x;
 	y = win->y + win->h + 5.f * win->dpi;
-	if (win && win->editorMode) {
-		btnIds.insert(btnIds.begin(), L"crop");
-		btnCodes.insert(btnCodes.begin(), L"裁");
-	}
 	refreshSize();
 	onKeyDown.add([this](UINT key) { this->win->onKeyDown(key); });
 	onTimer.add([this](UINT id) {
@@ -125,11 +121,7 @@ void ToolMain::onCreated()
 			btn->setColor(toolText());
 			btn->setHoverColor(toolText());
 			btn->setHoverBg(toolHover());
-			if (id == L"crop") {
-				btn->setFontFamily(L"Microsoft YaHei");
-				btn->setFontSize(12.f);
-			}
-			else if (id == L"rotate" || id == L"mirror") {
+			if (id == L"rotate" || id == L"mirror") {
 				btn->setFontFamily(L"Segoe UI Symbol");
 				btn->setFontSize(16.f);
 			}
@@ -307,11 +299,7 @@ void ToolMain::onClick(Ling::Button* btn)
 		}
 	}
 	curId = btn->id;
-	if (curId == L"crop") {
-		win->ensureCropRect();
-		win->toolSub->hideTools();
-	}
-	else if (curId == L"rect") win->toolSub->showRectTools();
+	if (curId == L"rect") win->toolSub->showRectTools();
 	else if (curId == L"ellipse") win->toolSub->showEllipseTools();
 	else if (curId == L"arrow") win->toolSub->showArrowTools();
 	else if (curId == L"number") win->toolSub->showNumberTools();

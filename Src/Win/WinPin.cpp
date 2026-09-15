@@ -221,7 +221,9 @@ void WinPin::updateCrop(POINT p)
 
 void WinPin::paintCrop(ID2D1DeviceContext* ctx)
 {
-	if (!editorMode || !toolMain || toolMain->curId != L"crop" || !cropInitialized || !cropShadeBrush || !cropBorderBrush) return;
+	// The crop frame is part of editor chrome, not a modal tool. Keep it visible
+	// while drawing so users can trim any edge before or after annotations.
+	if (!editorMode || !cropInitialized || !cropShadeBrush || !cropBorderBrush) return;
 	D2D1_RECT_F r{ cropRect.left * scale, cropRect.top * scale, cropRect.right * scale, cropRect.bottom * scale };
 	r.left = std::clamp(r.left, 0.f, w); r.right = std::clamp(r.right, 0.f, w);
 	r.top = std::clamp(r.top, 0.f, h); r.bottom = std::clamp(r.bottom, 0.f, h);
@@ -440,6 +442,7 @@ void WinPin::onCreated()
     d2d->deviceContext->CreateSolidColorBrush(D2D1::ColorF(0x000000, 0.42f), cropShadeBrush.GetAddressOf());
     d2d->deviceContext->CreateSolidColorBrush(D2D1::ColorF(0x1677ff), cropBorderBrush.GetAddressOf());
     d2d->deviceContext->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), cropHandleBrush.GetAddressOf());
+    if (editorMode) ensureCropRect();
     show();
 }
 
@@ -496,16 +499,23 @@ void WinPin::onDown(POINT pos, BOOL isRight)
 	if (editingText && textBox && textBox->isPosIn(pos)) return;
 	if (isRight) return;
 
-	if (editorMode && toolMain && toolMain->curId == L"crop") {
+	if (editorMode) {
 		ensureCropRect();
 		auto imgPos = toImgPos(pos);
-		cropHit = hitCrop(imgPos);
-		if (cropHit == CropHit::None) return;
-		cropPress = imgPos;
-		cropStart = cropRect;
-		isMouseDown = true;
-		SetCapture(hwnd);
-		return;
+		auto hit = hitCrop(imgPos);
+		// Edges/corners always win over drawing tools. The crop body itself is
+		// movable only when no drawing tool is selected, so drawing inside the
+		// image remains natural while the four sides stay live at all times.
+		const bool edgeHit = hit != CropHit::None && hit != CropHit::Inside;
+		const bool bodyMove = hit == CropHit::Inside && toolMain && toolMain->curId.empty();
+		if (edgeHit || bodyMove) {
+			cropHit = hit;
+			cropPress = imgPos;
+			cropStart = cropRect;
+			isMouseDown = true;
+			SetCapture(hwnd);
+			return;
+		}
 	}
 
 	// 双击判定得自己做，做法同 WinCap::onDown：Ling 的窗口类没带 CS_DBLCLKS，
@@ -563,8 +573,8 @@ void WinPin::onDown(POINT pos, BOOL isRight)
 
 void WinPin::onMove(POINT pos)
 {
-	if (editorMode && toolMain && toolMain->curId == L"crop") {
-		if (isMouseDown && cropHit != CropHit::None) updateCrop(toImgPos(pos));
+	if (editorMode && isMouseDown && cropHit != CropHit::None) {
+		updateCrop(toImgPos(pos));
 		return;
 	}
 	// 同 onDown：文本框里的移动归 TextBox（拖选、滚动条 hover），不参与 shape 的 hover 判定
@@ -618,8 +628,8 @@ void WinPin::onUp(POINT pos, BOOL isRight)
 		if (toolMain) toolMain->showPinContextMenu();
 		return;
 	}
-	if (editorMode && toolMain && toolMain->curId == L"crop") {
-		if (isMouseDown && cropHit != CropHit::None) updateCrop(toImgPos(pos));
+	if (editorMode && cropHit != CropHit::None) {
+		if (isMouseDown) updateCrop(toImgPos(pos));
 		isMouseDown = false;
 		cropHit = CropHit::None;
 		if (GetCapture() == hwnd) ReleaseCapture();
@@ -865,19 +875,20 @@ BOOL WinPin::setCursor()
 		onCursor(&handled);
 		if (handled) return TRUE;
 	}
-	if (editorMode && toolMain->curId == L"crop") {
+	if (editorMode) {
 		ensureCropRect();
 		POINT pos{}; GetCursorPos(&pos); ScreenToClient(hwnd, &pos);
 		auto hit = hitCrop(toImgPos(pos));
 		switch (hit) {
-		case CropHit::TopLeft: case CropHit::BottomRight: SetCursor(LoadCursor(nullptr, IDC_SIZENWSE)); break;
-		case CropHit::TopRight: case CropHit::BottomLeft: SetCursor(LoadCursor(nullptr, IDC_SIZENESW)); break;
-		case CropHit::Top: case CropHit::Bottom: SetCursor(LoadCursor(nullptr, IDC_SIZENS)); break;
-		case CropHit::Left: case CropHit::Right: SetCursor(LoadCursor(nullptr, IDC_SIZEWE)); break;
-		case CropHit::Inside: SetCursor(LoadCursor(nullptr, IDC_SIZEALL)); break;
-		default: SetCursor(LoadCursor(nullptr, IDC_ARROW)); break;
+		case CropHit::TopLeft: case CropHit::BottomRight: SetCursor(LoadCursor(nullptr, IDC_SIZENWSE)); return TRUE;
+		case CropHit::TopRight: case CropHit::BottomLeft: SetCursor(LoadCursor(nullptr, IDC_SIZENESW)); return TRUE;
+		case CropHit::Top: case CropHit::Bottom: SetCursor(LoadCursor(nullptr, IDC_SIZENS)); return TRUE;
+		case CropHit::Left: case CropHit::Right: SetCursor(LoadCursor(nullptr, IDC_SIZEWE)); return TRUE;
+		case CropHit::Inside:
+			if (toolMain && toolMain->curId.empty()) { SetCursor(LoadCursor(nullptr, IDC_SIZEALL)); return TRUE; }
+			break;
+		default: break;
 		}
-		return TRUE;
 	}
 	if (toolMain->curId == L"") {
 		SetCursor(LoadCursor(nullptr, editorMode ? IDC_ARROW : IDC_SIZEALL));
