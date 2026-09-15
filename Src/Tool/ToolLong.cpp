@@ -2,6 +2,7 @@
 #include "../Win/WinCap.h"
 #include "../Win/CapLong.h"
 #include "../Lang.h"
+#include "../Tip.h"
 #include "ToolLong.h"
 
 ToolLong::ToolLong(WinCap* win, CapLong* capLong) : Ling::WinBase(), win(win), capLong(capLong)
@@ -29,14 +30,15 @@ ToolLong::~ToolLong()
 
 void ToolLong::onCreated()
 {
+    tip = std::make_unique<Tip>(this);
+    // The tooltip is a separate top-level native window. Exclude it from screen
+    // capture so long screenshots can safely show the same hover help as normal capture.
+    tip->excludeFromCapture();
     body->setBg(0xFFFFFFFF);
     body->setBorder(1.f, 0xA8A8A8ff);
     body->setAlignItems(Ling::Align::Center);
     body->setFlexDirection(Ling::FlexDirection::Row);
 
-    // Long capture intentionally has no hover tooltips. The frame source is a
-    // desktop BitBlt, so auxiliary StarCap windows can become part of a stitched
-    // image when they overlap the selected region.
     for (size_t i = 0; i < btnIds.size(); i++)
     {
         auto btn = body->makeChild<Ling::Button>();
@@ -56,6 +58,8 @@ void ToolLong::onCreated()
             btn->setFontSize(13.f);
         }
 
+        if (i < btnTips.size() && !btnTips[i].empty())
+            tip->bind(btn, Lang::get(btnTips[i]));
         btn->onClick.add([this](Ling::Button* btn) { onClick(btn); });
     }
 
@@ -75,8 +79,14 @@ void ToolLong::setAutoRunning(bool running)
 
 void ToolLong::onClick(Ling::Button* btn)
 {
+    if (tip) tip->hide();
     if (btn->id == L"auto") {
         if (capLong) capLong->toggleAutoScroll();
+        return;
+    }
+    if (btn->id == L"mark") {
+        if (!capLong || !capLong->mark()) return;
+        win->close();
         return;
     }
     if (btn->id == L"ocr") {

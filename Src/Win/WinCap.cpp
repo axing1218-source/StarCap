@@ -192,8 +192,14 @@ void WinCap::layout()
     if (!hideScreenImg) {
         ctx->DrawBitmap(screenImg.Get(), destRect);
     }
-    cutMask->paint(ctx);
-    if (capLong) capLong->paint(ctx);
+    if (capLong && capLong->isResultEditing()) {
+        capLong->paint(ctx);
+        cutMask->paint(ctx);
+    }
+    else {
+        cutMask->paint(ctx);
+        if (capLong) capLong->paint(ctx);
+    }
     paintPix(ctx);
     canvas->finishPaint();
 }

@@ -24,8 +24,11 @@ public:
     void pin();
     bool ocr();
     bool translate();
+    bool mark();
+    bool enterResultAdjust();
 
     bool hasImage() const { return resultH > 0 && imgW > 0; }
+    bool isResultEditing() const { return resultEditing; }
     void layoutTool();
 
     // Long Capture Next keeps manual scrolling first-class. The toolbar button and Space both
@@ -33,7 +36,9 @@ public:
     void startAutoScroll();
     void toggleAutoScroll();
     bool isAutoScrolling() const { return autoScroll; }
-    bool canResizeSelection() const { return isCapturing && !isFinish && !autoScroll && acceptedFrames == 0; }
+    bool canResizeSelection() const {
+        return resultEditing || (isCapturing && !isFinish && !autoScroll && acceptedFrames == 0);
+    }
     void hotkeyEnter();
     void hotkeyEscape();
 
@@ -85,7 +90,10 @@ private:
     void restartForCurrentRect();
     void makeTool();
     void makeImgPreview();
+    void makeResultEditPreview();
     void paintImgPreview(ID2D1DeviceContext* ctx);
+    void clampResultEditRect();
+    bool applyResultCrop();
     void stopCap(bool showMessage = false);
     void makeStopText();
 
@@ -133,6 +141,7 @@ private:
     bool materializedDirty{ false };
     bool storageLimitReached{ false };
     bool resizingSelection{ false };
+    bool resultEditing{ false };
 
     CaptureState state{ CaptureState::Ready };
     ScrollStrategy scrollStrategy{ ScrollStrategy::Uia };
@@ -144,6 +153,7 @@ private:
 
     D2D1_RECT_F stopTextRect{};
     D2D1_POINT_2F stopTextPos{};
+    D2D1_RECT_F resultPreviewRect{};
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> textBrush;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> bgBrush;
     Microsoft::WRL::ComPtr<IDWriteTextLayout> layoutTextEnd;

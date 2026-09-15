@@ -597,12 +597,18 @@ void CapLong::onDown(POINT pos)
 
     resizingSelection = true;
     win->isPress = true;
-    win->killTimer(frameCaptureTimerId);
-    win->killTimer(autoScrollTimerId);
-    win->restoreWin();
     SetCapture(win->hwnd);
     win->cutMask->startAdjust(pos);
     if (tool) tool->hide();
+
+    if (resultEditing) {
+        StarCapDiag::append(std::format(L"[long-next] result-crop-resize-begin hit={}", static_cast<int>(hit)));
+        return;
+    }
+
+    win->killTimer(frameCaptureTimerId);
+    win->killTimer(autoScrollTimerId);
+    win->restoreWin();
     StarCapDiag::append(std::format(L"[long-next] resize-begin hit={}", static_cast<int>(hit)));
     win->refresh();
 }
@@ -611,17 +617,28 @@ void CapLong::onMove(POINT pos)
 {
     if (!resizingSelection) return;
     win->cutMask->adjust(pos);
+    if (resultEditing) clampResultEditRect();
 }
 
 void CapLong::onUp(POINT pos)
 {
     if (!resizingSelection) return;
     win->cutMask->adjust(pos);
+    if (resultEditing) clampResultEditRect();
     resizingSelection = false;
     win->isPress = false;
     if (GetCapture() == win->hwnd) ReleaseCapture();
 
-    // Re-open the interior to the target application before re-capturing the new first frame.
+    if (resultEditing) {
+        if (tool) {
+            layoutTool();
+            tool->show();
+        }
+        StarCapDiag::append(L"[long-next] result-crop-resize-end");
+        win->refresh();
+        return;
+    }
+
     win->hollowWin();
     restartForCurrentRect();
     if (tool) {
@@ -1139,6 +1156,119 @@ bool CapLong::ensureMaterialized()
     }
 }
 
+bool CapLong::enterResultAdjust()
+{
+    if (!ensureMaterialized()) return false;
+    if (!isFinish) {
+        stopCap(false);
+        return resultEditing;
+    }
+    if (resultEditing) return true;
+    resultEditing = true;
+    win->hideScreenImg = true;
+    win->cutMask->hideLabel = false;
+    makeResultEditPreview();
+    if (!imgPreview) {
+        resultEditing = false;
+        return false;
+    }
+    win->cutMask->maskRect = resultPreviewRect;
+    layoutTool();
+    win->refresh();
+    StarCapDiag::append(std::format(L"[long-next] result-adjust-enter image={}x{} preview=[{:.0f},{:.0f},{:.0f},{:.0f}]",
+        imgW, resultH, resultPreviewRect.left, resultPreviewRect.top,
+        resultPreviewRect.right, resultPreviewRect.bottom));
+    return true;
+}
+
+void CapLong::makeResultEditPreview()
+{
+    imgPreview.Reset();
+    if (imgData.empty() || imgW <= 0 || resultH <= 0) return;
+
+    const float margin = std::max(18.f, 28.f * win->dpi);
+    const float maxW = std::max(120.f, win->w - margin * 2.f);
+    const float maxH = std::max(120.f, win->h - margin * 2.f - 54.f * win->dpi);
+    const float scale = std::min(1.f, std::min(maxW / imgW, maxH / resultH));
+    const int previewW = std::max(1, static_cast<int>(std::lround(imgW * scale)));
+    const int previewH = std::max(1, static_cast<int>(std::lround(resultH * scale)));
+
+    std::vector<BYTE> scaled(static_cast<size_t>(previewW) * previewH * 4);
+    for (int y = 0; y < previewH; ++y) {
+        const int srcY = std::min(resultH - 1,
+            static_cast<int>((static_cast<long long>(y) * resultH) / previewH));
+        for (int x = 0; x < previewW; ++x) {
+            const int srcX = std::min(imgW - 1,
+                static_cast<int>((static_cast<long long>(x) * imgW) / previewW));
+            const size_t si = (static_cast<size_t>(srcY) * imgW + srcX) * 4;
+            const size_t di = (static_cast<size_t>(y) * previewW + x) * 4;
+            scaled[di] = imgData[si];
+            scaled[di + 1] = imgData[si + 1];
+            scaled[di + 2] = imgData[si + 2];
+            scaled[di + 3] = imgData[si + 3];
+        }
+    }
+
+    D2D1_BITMAP_PROPERTIES1 props = {
+        .pixelFormat{D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)},
+        .dpiX{96.0f}, .dpiY{96.0f}, .bitmapOptions{D2D1_BITMAP_OPTIONS_NONE}
+    };
+    Ling::D2D::get()->deviceContext->CreateBitmap(D2D1::SizeU(previewW, previewH),
+        scaled.data(), previewW * 4, props, imgPreview.GetAddressOf());
+
+    const float left = std::max(margin, (win->w - previewW) * .5f);
+    const float top = std::max(margin, (win->h - previewH - 44.f * win->dpi) * .5f);
+    resultPreviewRect = D2D1::RectF(left, top, left + previewW, top + previewH);
+}
+
+void CapLong::clampResultEditRect()
+{
+    if (!resultEditing) return;
+    auto& r = win->cutMask->maskRect;
+    r.left = std::clamp(r.left, resultPreviewRect.left, resultPreviewRect.right - 4.f);
+    r.top = std::clamp(r.top, resultPreviewRect.top, resultPreviewRect.bottom - 4.f);
+    r.right = std::clamp(r.right, r.left + 4.f, resultPreviewRect.right);
+    r.bottom = std::clamp(r.bottom, r.top + 4.f, resultPreviewRect.bottom);
+}
+
+bool CapLong::applyResultCrop()
+{
+    if (!resultEditing) return true;
+    if (imgData.empty() || imgW <= 0 || resultH <= 0) return false;
+    clampResultEditRect();
+    const auto& r = win->cutMask->maskRect;
+    const float pw = resultPreviewRect.right - resultPreviewRect.left;
+    const float ph = resultPreviewRect.bottom - resultPreviewRect.top;
+    if (pw <= 0.f || ph <= 0.f) return false;
+
+    auto mapX = [&](float x) { return (x - resultPreviewRect.left) * imgW / pw; };
+    auto mapY = [&](float y) { return (y - resultPreviewRect.top) * resultH / ph; };
+    int left = std::clamp(static_cast<int>(std::floor(mapX(r.left))), 0, imgW - 1);
+    int top = std::clamp(static_cast<int>(std::floor(mapY(r.top))), 0, resultH - 1);
+    int right = std::clamp(static_cast<int>(std::ceil(mapX(r.right))), left + 1, imgW);
+    int bottom = std::clamp(static_cast<int>(std::ceil(mapY(r.bottom))), top + 1, resultH);
+
+    const int oldW = imgW, oldH = resultH;
+    const int newW = right - left, newH = bottom - top;
+    if (left != 0 || top != 0 || right != oldW || bottom != oldH) {
+        std::vector<BYTE> cropped(static_cast<size_t>(newW) * newH * 4);
+        const size_t srcRow = static_cast<size_t>(oldW) * 4;
+        const size_t dstRow = static_cast<size_t>(newW) * 4;
+        for (int y = 0; y < newH; ++y) {
+            const BYTE* src = imgData.data() + static_cast<size_t>(top + y) * srcRow + static_cast<size_t>(left) * 4;
+            CopyMemory(cropped.data() + static_cast<size_t>(y) * dstRow, src, dstRow);
+        }
+        imgData = std::move(cropped);
+        imgW = newW;
+        resultH = newH;
+        materializedDirty = false;
+        StarCapDiag::append(std::format(L"[long-next] result-crop {}x{} -> {}x{} rect=[{},{},{},{}]",
+            oldW, oldH, newW, newH, left, top, right, bottom));
+    }
+    resultEditing = false;
+    return true;
+}
+
 void CapLong::makeImgPreview()
 {
     imgPreview.Reset();
@@ -1239,7 +1369,12 @@ void CapLong::layoutTool()
 
 void CapLong::paintImgPreview(ID2D1DeviceContext* ctx)
 {
-    if (!imgPreview || !tool) return;
+    if (!imgPreview) return;
+    if (resultEditing) {
+        ctx->DrawBitmap(imgPreview.Get(), resultPreviewRect);
+        return;
+    }
+    if (!tool) return;
     auto bitmapSize = imgPreview->GetPixelSize();
     float drawW = static_cast<float>(bitmapSize.width);
     float drawH = static_cast<float>(bitmapSize.height);
@@ -1454,6 +1589,9 @@ void CapLong::resetAutoStep()
 
 void CapLong::pauseAuto(const wchar_t* reason, bool hardPause)
 {
+    // Auto-scroll is only an aid. Even when it cannot advance further, keep the
+    // stitched session alive so the user can scroll manually, resume Auto, press
+    // Enter to copy, or choose a terminal toolbar action.
     if (!autoScroll && !hardPaused) return;
     autoScroll = false;
     resetAutoStep();
@@ -1492,7 +1630,9 @@ void CapLong::startAutoScroll()
 void CapLong::toggleAutoScroll()
 {
     if (!isCapturing || isFinish) return;
-    if (autoScroll) pauseAuto(L"user-pause", true);
+    // Auto-scroll is only a capture aid. Pausing it leaves frame capture
+    // running so manual wheel scrolling can continue the same stitched session.
+    if (autoScroll) pauseAuto(L"user-pause", false);
     else startAutoScroll();
 }
 
@@ -1547,6 +1687,8 @@ void CapLong::stopCap(bool showMessage)
     StarCapOcr::restoreAfterLongCapture();
     if (showMessage) makeStopText();
     win->restoreWin();
+    // No standalone "Done" stage: the action that ends capture (Enter/copy,
+    // mark, save, OCR, translate or pin) decides what happens next.
     win->refresh();
 }
 
@@ -1572,6 +1714,7 @@ void CapLong::makeStopText()
 void CapLong::copyToClipboard()
 {
     if (!ensureMaterialized()) return;
+    if (resultEditing && !applyResultCrop()) return;
     if (!isFinish) stopCap(false);
     Util::saveToClipboard(imgW, resultH, imgData.data());
 }
@@ -1579,6 +1722,7 @@ void CapLong::copyToClipboard()
 bool CapLong::saveToFile()
 {
     if (!ensureMaterialized()) return false;
+    if (resultEditing && !applyResultCrop()) return false;
     if (!isFinish) stopCap(false);
     auto path = Util::getSaveFilePath(win->hwnd);
     if (path.empty()) return false;
@@ -1588,6 +1732,7 @@ bool CapLong::saveToFile()
 bool CapLong::ocr()
 {
     if (!ensureMaterialized()) return false;
+    if (resultEditing && !applyResultCrop()) return false;
     if (!isFinish) stopCap(false);
     auto data = imgData;
     StarCapOcr::showPixels(std::move(data), imgW, resultH, true);
@@ -1597,15 +1742,33 @@ bool CapLong::ocr()
 bool CapLong::translate()
 {
     if (!ensureMaterialized()) return false;
+    if (resultEditing && !applyResultCrop()) return false;
     if (!isFinish) stopCap(false);
     auto data = imgData;
     StarCapOcr::showTranslationPixels(std::move(data), imgW, resultH, true);
     return true;
 }
 
+bool CapLong::mark()
+{
+    if (!ensureMaterialized()) return false;
+    if (resultEditing && !applyResultCrop()) return false;
+    if (!isFinish) stopCap(false);
+    auto monitor = MonitorFromPoint({ win->x, win->y }, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi{ sizeof(MONITORINFO) };
+    if (!GetMonitorInfo(monitor, &mi)) return false;
+    const int workW = mi.rcWork.right - mi.rcWork.left;
+    const int workH = mi.rcWork.bottom - mi.rcWork.top;
+    const int posX = mi.rcWork.left + (workW - std::min(imgW, workW)) / 2;
+    const int posY = mi.rcWork.top + (workH - std::min(resultH, workH)) / 2;
+    WinPin::initLongEditorFromData(posX, posY, imgW, resultH, imgData);
+    return true;
+}
+
 void CapLong::pin()
 {
     if (!ensureMaterialized()) return;
+    if (resultEditing && !applyResultCrop()) return;
     if (!isFinish) stopCap(false);
     auto monitor = MonitorFromPoint({ 0, 0 }, MONITOR_DEFAULTTOPRIMARY);
     MONITORINFO mi{ sizeof(MONITORINFO) };

@@ -282,8 +282,8 @@ void ToolMain::onClick(Ling::Button* btn)
 	if (btn->id == L"close") { win->close(); return; }
 	else if (btn->id == L"undo") { win->history->undo(); return; }
 	else if (btn->id == L"redo") { win->history->redo(); return; }
-	else if (btn->id == L"rotate") { StarCapPinTransform::rotateClockwise(win); return; }
-	else if (btn->id == L"mirror") { StarCapPinTransform::mirrorHorizontal(win); return; }
+	else if (btn->id == L"rotate") { StarCapPinTransform::rotateClockwise(win); win->resetCrop(); return; }
+	else if (btn->id == L"mirror") { StarCapPinTransform::mirrorHorizontal(win); win->resetCrop(); return; }
 	else if (btn->id == L"save") { win->saveToFile(); return; }
 	else if (btn->id == L"clipboard") { win->copyToClipboard(); return; }
 
