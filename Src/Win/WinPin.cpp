@@ -503,12 +503,11 @@ void WinPin::onDown(POINT pos, BOOL isRight)
 		ensureCropRect();
 		auto imgPos = toImgPos(pos);
 		auto hit = hitCrop(imgPos);
-		// Edges/corners always win over drawing tools. The crop body itself is
-		// movable only when no drawing tool is selected, so drawing inside the
-		// image remains natural while the four sides stay live at all times.
+		// Edges/corners always resize the current capture, even while an
+		// annotation tool is active. The interior stays free for normal window
+		// dragging whenever no drawing tool is selected.
 		const bool edgeHit = hit != CropHit::None && hit != CropHit::Inside;
-		const bool bodyMove = hit == CropHit::Inside && toolMain && toolMain->curId.empty();
-		if (edgeHit || bodyMove) {
+		if (edgeHit) {
 			cropHit = hit;
 			cropPress = imgPos;
 			cropStart = cropRect;
@@ -543,21 +542,19 @@ void WinPin::onDown(POINT pos, BOOL isRight)
 		copyToClipboard();
 		return;
 	}
-	// Editor mode is intentionally not a desktop pin. With no drawing tool
-	// selected, a left press simply leaves the captured canvas fixed in place.
-	if (editorMode && toolMain->curId == L"") return;
+	// With no annotation tool selected, editor mode behaves like Snipaste:
+	// drag inside the image to move the whole editor window. Selecting a drawing
+	// tool temporarily gives normal interior drags to that tool, while the crop
+	// edges/corners above remain adjustable at all times.
 	// 记的是按下点在窗口内的偏移（客户区坐标），拖动时用它把抓住的那一点保持在光标下
 	pressPos.x = pos.x;
 	pressPos.y = pos.y;
 	isMouseDown = true;
 	hasDragged = false;
 	SetCapture(hwnd);
-	if (toolMain->curId == L"") { // plain pin: no tool means drag the pinned window
-		// Do not hide ToolMain here. A normal pin starts with its toolbar hidden,
-		// but once the user explicitly enables it from the context menu it must
-		// remain visible and follow the pin while the window is moved. Hiding the
-		// native toolbar without changing pinToolbarVisible left the menu checked
-		// while the window itself was invisible, forcing an off/on toggle to recover.
+	if (toolMain->curId == L"") { // no tool: drag pin/editor window
+		// Keep the toolbar visible while editor mode is moved. Normal pins may
+		// still have their toolbar hidden, but the same drag path applies to both.
 		return;
 	}
 	// 以下都是交给 shape 的坐标，一律换算成底图像素（拖窗口那条路仍用窗口坐标）
@@ -643,9 +640,8 @@ void WinPin::onUp(POINT pos, BOOL isRight)
 	// 这一下按下有没有新建出一个留得住的元素：紧接着来第二下凑成双击时要把它撤掉（见 onDown）
 	prevPressCreatedShape = false;
 	if (toolMain->curId == L"") {
-		// Plain pin: a click/drag must never summon the editor toolbar.
-		// ToolMain owns the desired visibility state and restores it after a drag
-		// only when the user explicitly entered editor mode / enabled it from the menu.
+		// Moving either a pin or an annotation editor only repositions its tools;
+		// it must not change the current toolbar visibility/selection state.
 		layoutTools();
 	}
 	else if (shapeHover) {
@@ -891,7 +887,7 @@ BOOL WinPin::setCursor()
 		}
 	}
 	if (toolMain->curId == L"") {
-		SetCursor(LoadCursor(nullptr, editorMode ? IDC_ARROW : IDC_SIZEALL));
+		SetCursor(LoadCursor(nullptr, IDC_SIZEALL));
 		return TRUE;
 	}
 	if (shapeHover) {
